@@ -50,3 +50,21 @@ springdoc:
     path: /swagger-ui.html
     tags-sorter: alpha
     operations-sorter: alpha
+
+# JWT 配置
+jwt:
+  secret: ${JWT_SECRET}
+  expiration: 86400000  # 24h
+
+# 机器人配置
+robot:
+  token: ${ROBOT_TOKEN}
+  online-ttl-ms: 30000
+
+# 文件上传配置
+upload:
+  dir: ${UPLOAD_DIR:uploads}
+
+# AI 识别服务配置
+ai:
+  url: ${AI_URL:http://localhost:5000/recognize}

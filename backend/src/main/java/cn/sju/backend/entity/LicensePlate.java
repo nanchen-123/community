@@ -36,7 +36,7 @@ public class LicensePlate implements Serializable {
     private String plateNumber;
 
     /** 图片 URL */
-    private String picture;
+    private String imgUrl;
 
     /** 位置 */
     private String location;

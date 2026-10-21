@@ -24,6 +24,12 @@ public class Alarm implements Serializable {
     /** 设备 ID */
     private Long deviceId;
 
+    /** 小区 ID */
+    private Long communityId;
+
+    /** 任务 ID */
+    private Long taskId;
+
     /** 类型 */
     private String alarmType;
 
@@ -40,13 +46,13 @@ public class Alarm implements Serializable {
     private LocalDateTime handleTime;
 
     /** 级别 */
-    private String category;
+    private String level;
 
     /** 识别情况 */
     private String recognizeStatus;
 
     /** 图片 URL */
-    private String picture;
+    private String imgUrl;
 
     /** 备注 */
     private String remark;
