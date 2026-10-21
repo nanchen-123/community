@@ -1,9 +1,14 @@
 package cn.sju.backend;
 
+import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
+/**
+ * 启动类
+ */
 @SpringBootApplication
+@MapperScan("cn.sju.backend.mapper")
 public class BackendApplication {
 
     public static void main(String[] args) {
