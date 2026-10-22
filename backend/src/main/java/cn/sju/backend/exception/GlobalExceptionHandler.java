@@ -3,6 +3,7 @@ package cn.sju.backend.exception;
 import cn.sju.backend.common.Result;
 import cn.sju.backend.common.ResultCode;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.NoHandlerFoundException;
 
+import java.io.IOException;
 import java.util.stream.Collectors;
 
 /**
@@ -60,10 +62,36 @@ public class GlobalExceptionHandler {
         return Result.fail(ResultCode.NOT_FOUND);
     }
 
+    /** 处理非法参数异常 */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public Object handleIllegalArgumentException(IllegalArgumentException e,
+                                                  HttpServletRequest request,
+                                                  HttpServletResponse response) throws IOException {
+        log.warn("参数非法: uri={}, message={}", request.getRequestURI(), e.getMessage());
+        if (isRobotRequest(request)) {
+            response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+            response.setContentType("application/json;charset=UTF-8");
+            response.getWriter().write("{\"code\":400,\"message\":\"" + e.getMessage() + "\"}");
+            return null;
+        }
+        return Result.fail(ResultCode.BAD_REQUEST, e.getMessage());
+    }
+
     /** 处理其余未捕获异常 */
     @ExceptionHandler(Exception.class)
-    public Result<Void> handleException(Exception e, HttpServletRequest request) {
+    public Object handleException(Exception e, HttpServletRequest request, HttpServletResponse response) throws IOException {
         log.error("系统异常: uri={}", request.getRequestURI(), e);
+        if (isRobotRequest(request)) {
+            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            response.setContentType("application/json;charset=UTF-8");
+            response.getWriter().write("{\"code\":500,\"message\":\"系统内部错误\"}");
+            return null;
+        }
         return Result.fail(ResultCode.FAIL.getCode(), "系统内部错误，请联系管理员");
+    }
+
+    private boolean isRobotRequest(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        return uri.startsWith("/api/robot/") || uri.startsWith("/api/photo/");
     }
 }
