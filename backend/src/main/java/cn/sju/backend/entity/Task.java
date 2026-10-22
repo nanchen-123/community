@@ -28,6 +28,9 @@ public class Task implements Serializable {
     /** 设备 ID */
     private Long deviceId;
 
+    /** 小区 ID */
+    private Long communityId;
+
     /** 用户 ID */
     private Long userId;
 

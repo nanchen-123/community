@@ -1,8 +1,7 @@
 package cn.sju.backend.service;
 
 import cn.sju.backend.client.AiRecognizeClient;
-import cn.sju.backend.vo.RecognitionResultMessage;
-import cn.sju.backend.websocket.WebSocketSessionManager;
+import cn.sju.backend.websocket.WsBroadcaster;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Async;
@@ -21,7 +20,7 @@ public class AiRecognizeService {
     private AiRecognizeClient aiRecognizeClient;
 
     @Autowired
-    private WebSocketSessionManager sessionManager;
+    private WsBroadcaster wsBroadcaster;
 
     /**
      * 异步触发 AI 识别
@@ -40,14 +39,20 @@ public class AiRecognizeService {
 
             // TODO: 更新 photo_request 状态为识别完成并保存结果
 
-            RecognitionResultMessage message = new RecognitionResultMessage(requestId, imagePath, result);
-            sessionManager.broadcast(message);
+            wsBroadcaster.sendRecognitionResult(Map.of(
+                    "requestId", requestId,
+                    "imagePath", imagePath,
+                    "result", result
+            ));
             log.info("AI 识别完成并广播: requestId={}", requestId);
         } catch (Exception e) {
             log.error("AI 识别失败: requestId={}", requestId, e);
             // TODO: 更新 photo_request 状态为识别失败
-            RecognitionResultMessage message = new RecognitionResultMessage(requestId, imagePath, Map.of("error", e.getMessage()));
-            sessionManager.broadcast(message);
+            wsBroadcaster.sendRecognitionResult(Map.of(
+                    "requestId", requestId,
+                    "imagePath", imagePath,
+                    "error", e.getMessage()
+            ));
         }
     }
 }

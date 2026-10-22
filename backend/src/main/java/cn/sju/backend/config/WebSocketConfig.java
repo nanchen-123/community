@@ -1,6 +1,6 @@
 package cn.sju.backend.config;
 
-import cn.sju.backend.websocket.RecognitionWebSocketHandler;
+import cn.sju.backend.websocket.RobotWebSocketHandler;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
@@ -15,11 +15,11 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 public class WebSocketConfig implements WebSocketConfigurer {
 
     @Autowired
-    private RecognitionWebSocketHandler recognitionWebSocketHandler;
+    private RobotWebSocketHandler robotWebSocketHandler;
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-        registry.addHandler(recognitionWebSocketHandler, "/ws/recognition")
+        registry.addHandler(robotWebSocketHandler, "/ws")
                 .setAllowedOrigins("*");
     }
 }
