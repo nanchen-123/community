@@ -56,7 +56,14 @@ public class AuthController {
                 user.getRole(),
                 user.getCommunityId()
         );
-        return Result.success(new TokenVO(token, expiration));
+        TokenVO.UserInfo userInfo = new TokenVO.UserInfo(
+                user.getUserId(),
+                user.getUserName(),
+                user.getName(),
+                user.getRole(),
+                user.getCommunityId()
+        );
+        return Result.success(new TokenVO(token, expiration, userInfo));
     }
 
     /**

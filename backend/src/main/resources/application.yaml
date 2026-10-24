@@ -15,7 +15,7 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/community_db?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
     username: ${DB_USERNAME:root}
-    password: ${DB_PASSWORD}
+    password: ${DB_PASSWORD:105928}
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: Asia/Shanghai
@@ -30,9 +30,6 @@ mybatis-plus:
   global-config:
     db-config:
       id-type: auto
-      logic-delete-field: deleted
-      logic-delete-value: 1
-      logic-not-delete-value: 0
 
 # 日志配置
 logging:
@@ -53,12 +50,12 @@ springdoc:
 
 # JWT 配置
 jwt:
-  secret: ${JWT_SECRET}
+  secret: ${JWT_SECRET:community-ai-inspection-secret-key-2026}
   expiration: 86400000  # 24h
 
 # 机器人配置
 robot:
-  token: ${ROBOT_TOKEN}
+  token: ${ROBOT_TOKEN:robot-dev-token}
   online-ttl-ms: 30000
 
 # 文件上传配置

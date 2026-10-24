@@ -22,6 +22,12 @@ target/
 build/
 out/
 *.class
+dist/
+
+# ---------- 前端依赖与缓存 ----------
+node_modules/
+.vite/
+*.local
 
 # ---------- 日志 ----------
 *.log

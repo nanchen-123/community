@@ -33,7 +33,7 @@ public class FilterConfig {
     public FilterRegistrationBean<JwtAuthFilter> jwtAuthFilterRegistration() {
         FilterRegistrationBean<JwtAuthFilter> registration = new FilterRegistrationBean<>();
         registration.setFilter(jwtAuthFilter);
-        registration.addUrlPatterns("/api/*");
+        registration.addUrlPatterns("/*");
         registration.setOrder(2);
         registration.setName("jwtAuthFilter");
         return registration;

@@ -29,7 +29,10 @@ public class RobotTokenFilter implements Filter {
         HttpServletRequest httpRequest = (HttpServletRequest) request;
         HttpServletResponse httpResponse = (HttpServletResponse) response;
 
-        String token = httpRequest.getHeader("Robot-Token");
+        String token = httpRequest.getHeader("X-Robot-Token");
+        if (!StringUtils.hasText(token)) {
+            token = httpRequest.getHeader("Robot-Token");
+        }
         if (!StringUtils.hasText(token)) {
             token = httpRequest.getParameter("token");
         }

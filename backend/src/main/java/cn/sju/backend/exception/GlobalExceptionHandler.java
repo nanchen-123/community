@@ -87,7 +87,8 @@ public class GlobalExceptionHandler {
             response.getWriter().write("{\"code\":500,\"message\":\"系统内部错误\"}");
             return null;
         }
-        return Result.fail(ResultCode.FAIL.getCode(), "系统内部错误，请联系管理员");
+        String msg = e.getMessage() != null ? e.getMessage() : "系统内部错误";
+        return Result.fail(ResultCode.FAIL.getCode(), msg);
     }
 
     private boolean isRobotRequest(HttpServletRequest request) {
