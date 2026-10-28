@@ -1,7 +1,9 @@
 package cn.sju.backend.config;
 
+import cn.sju.backend.filter.DataScopeFilter;
 import cn.sju.backend.filter.JwtAuthFilter;
 import cn.sju.backend.filter.RobotTokenFilter;
+import cn.sju.backend.filter.RoleGuardFilter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;

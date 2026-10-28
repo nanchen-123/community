@@ -3,9 +3,11 @@ package cn.sju.backend.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
@@ -40,9 +42,11 @@ public class Alarm implements Serializable {
     private String handleStatus;
 
     /** 发现时间 */
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime findTime;
 
     /** 处理时间 */
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime handleTime;
 
     /** 级别 */
@@ -50,6 +54,9 @@ public class Alarm implements Serializable {
 
     /** 识别情况 */
     private String recognizeStatus;
+
+    /** 识别置信度(%) */
+    private BigDecimal confidence;
 
     /** 图片 URL */
     private String imgUrl;

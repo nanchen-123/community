@@ -8,11 +8,14 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -20,6 +23,10 @@ import java.util.UUID;
  */
 @Service
 public class UploadServiceImpl implements UploadService {
+
+    /** 仅允许的图片扩展名，避免 html/svg 等可执行内容落盘 */
+    private static final Set<String> ALLOWED_EXTENSIONS = Set.of("jpg", "jpeg", "png", "gif", "webp", "bmp");
+    private static final long MAX_FILE_SIZE = 10 * 1024 * 1024L;
 
     @Value("${upload.dir:uploads}")
     private String uploadDir;
@@ -29,21 +36,31 @@ public class UploadServiceImpl implements UploadService {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("上传文件不能为空");
         }
+        if (file.getSize() > MAX_FILE_SIZE) {
+            throw new IllegalArgumentException("文件大小不能超过 10MB");
+        }
 
         String originalFilename = StringUtils.cleanPath(file.getOriginalFilename());
         String ext = getExtension(originalFilename);
-        if (!StringUtils.hasText(ext)) {
-            ext = "jpg";
+        if (!ALLOWED_EXTENSIONS.contains(ext)) {
+            throw new IllegalArgumentException("仅支持 jpg/jpeg/png/gif/webp/bmp 格式的图片");
+        }
+        String contentType = file.getContentType();
+        if (contentType == null || !contentType.toLowerCase().startsWith("image/")) {
+            throw new IllegalArgumentException("上传文件必须为图片类型");
         }
 
         String dateDir = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
         String filename = System.currentTimeMillis() + "_" + UUID.randomUUID().toString().substring(0, 8) + "." + ext;
-        Path targetDir = Paths.get(uploadDir, dateDir);
+        // 必须转成绝对路径：MultipartFile.transferTo 收到相对路径时会写到 Tomcat 临时目录下，父目录不存在导致保存失败
+        Path targetDir = Paths.get(uploadDir, dateDir).toAbsolutePath().normalize();
 
         try {
             Files.createDirectories(targetDir);
             Path targetPath = targetDir.resolve(filename);
-            file.transferTo(targetPath.toFile());
+            try (InputStream in = file.getInputStream()) {
+                Files.copy(in, targetPath, StandardCopyOption.REPLACE_EXISTING);
+            }
 
             String url = "/uploads/" + dateDir + "/" + filename;
             return new UploadResult(url, filename, true);

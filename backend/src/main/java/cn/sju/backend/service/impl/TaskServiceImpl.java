@@ -9,6 +9,9 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.util.Collection;
+import java.util.List;
+
 /**
  * 任务 Service 实现
  */
@@ -23,6 +26,13 @@ public class TaskServiceImpl implements TaskService {
         IPage<Task> page = new Page<>(pageNum, pageSize);
         QueryWrapper<Task> wrapper = new QueryWrapper<>(query);
         return taskMapper.selectPage(page, wrapper);
+    }
+
+    @Override
+    public List<Task> listByStatuses(Collection<String> statuses) {
+        QueryWrapper<Task> wrapper = new QueryWrapper<>();
+        wrapper.in("task_status", statuses).orderByAsc("task_id");
+        return taskMapper.selectList(wrapper);
     }
 
     @Override

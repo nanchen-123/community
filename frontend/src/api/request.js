@@ -26,9 +26,12 @@ request.interceptors.request.use(config => {
 // 响应拦截器
 request.interceptors.response.use(
   response => {
-    // 机器人接口不走 Result<T> 包装，直接返回
+    // 机器人接口不走 Result<T> 包装，直接返回；
+    // 但 /robot-status/** 属于普通业务接口（返回 Result 包装），不能按裸接口处理
     const url = response.config.url || ''
-    if (url.startsWith('/robot') || url.startsWith('/photo')) {
+    const isRawRobotApi = (url.startsWith('/robot') && !url.startsWith('/robot-status'))
+      || url.startsWith('/photo')
+    if (isRawRobotApi && !(response.data && response.data.code !== undefined)) {
       return response.data
     }
 

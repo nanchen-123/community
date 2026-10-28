@@ -2,7 +2,17 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  Odometer, Tickets, Warning, Cpu, Van, UserFilled,
+  DataAnalysis, User, OfficeBuilding, Fold, Expand, ArrowDown
+} from '@element-plus/icons-vue'
 import { communityState, loadCommunities } from '../stores/community'
+
+// 菜单图标（按需引入，替代全局注册全部图标）
+const iconMap = {
+  Odometer, Tickets, Warning, Cpu, Van,
+  UserFilled, DataAnalysis, User, OfficeBuilding
+}
 
 const router = useRouter()
 const route = useRoute()
@@ -11,10 +21,10 @@ const route = useRoute()
 const ADMIN_ROLES = ['管理员', '超级管理员']
 const ALL_MENUS = [
   { path: '/home', title: '首页概览', icon: 'Odometer', hideForRoles: ADMIN_ROLES },
-  { path: '/device', title: '设备管理', icon: 'Cpu' },
   { path: '/task', title: '巡检任务', icon: 'Tickets' },
-  { path: '/alarm', title: '告警管理', icon: 'Warning' },
-  { path: '/plate', title: '车牌识别', icon: 'Van' },
+  { path: '/alarm', title: '安防台账', icon: 'Warning' },
+  { path: '/device', title: '设备管理', icon: 'Cpu' },
+  { path: '/plate', title: '车牌识别', icon: 'Van', roles: ADMIN_ROLES },
   { path: '/resident', title: '居民管理', icon: 'UserFilled' },
   { path: '/analytics', title: '数据分析', icon: 'DataAnalysis', hideForRoles: ADMIN_ROLES },
   { path: '/admin/users', title: '用户管理', icon: 'User', roles: ADMIN_ROLES },
@@ -114,7 +124,7 @@ const collapsed = ref(false)
           :key="m.path"
           :index="m.path"
         >
-          <el-icon><component :is="m.icon" /></el-icon>
+          <el-icon><component :is="iconMap[m.icon]" /></el-icon>
           <template #title>{{ m.title }}</template>
         </el-menu-item>
       </el-menu>

@@ -32,8 +32,10 @@ public class AlarmController {
     @GetMapping("/page")
     public Result<?> page(@RequestParam(defaultValue = "1") Integer pageNum,
                           @RequestParam(defaultValue = "10") Integer pageSize,
+                          @RequestParam(required = false) String startTime,
+                          @RequestParam(required = false) String endTime,
                           @ModelAttribute Alarm query) {
-        return Result.success(alarmService.page(pageNum, pageSize, query));
+        return Result.success(alarmService.page(pageNum, pageSize, query, startTime, endTime));
     }
 
     @Operation(summary = "根据 ID 查询告警")

@@ -10,9 +10,13 @@ const routes = [
       { path: 'home', component: () => import('../views/pages/Dashboard.vue') },
       { path: 'analytics', component: () => import('../views/pages/Analytics.vue') },
       { path: 'device', component: () => import('../views/pages/DeviceManage.vue') },
-      { path: 'task', component: () => import('../views/pages/Placeholder.vue'), props: { title: '巡检任务' } },
-      { path: 'alarm', component: () => import('../views/pages/Placeholder.vue'), props: { title: '告警管理' } },
-      { path: 'plate', component: () => import('../views/pages/Placeholder.vue'), props: { title: '车牌识别' } },
+      { path: 'task', component: () => import('../views/pages/TaskEntry.vue') },
+      { path: 'alarm', component: () => import('../views/pages/AlarmEntry.vue') },
+      {
+        path: 'plate',
+        component: () => import('../views/pages/PlateManage.vue'),
+        meta: { roles: ['管理员', '超级管理员'] }
+      },
       { path: 'resident', component: () => import('../views/pages/ResidentManage.vue') },
       {
         path: 'admin/users',
@@ -33,34 +37,73 @@ const router = createRouter({
   routes
 })
 
-// 从 storage 取当前用户角色
-function getCurrentRole() {
+// 读取登录态（localStorage 优先，其次 sessionStorage）
+function readAuth() {
   try {
     const raw = localStorage.getItem('security_auth') || sessionStorage.getItem('security_auth')
-    if (raw) return JSON.parse(raw).role || ''
-  } catch {}
-  return ''
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
 }
 
-// 路由守卫
+// 解析 JWT 的 exp 判断是否过期，非标准 token 交给后端 401 兜底
+function isTokenExpired(token) {
+  if (!token) return true
+  try {
+    const part = token.split('.')[1]
+    if (!part) return false
+    const payload = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/')))
+    return payload.exp ? payload.exp * 1000 <= Date.now() : false
+  } catch {
+    return false
+  }
+}
+
+function clearAuth() {
+  localStorage.removeItem('security_auth')
+  sessionStorage.removeItem('security_auth')
+  localStorage.removeItem('token')
+  sessionStorage.removeItem('token')
+}
+
+// 已登录时按角色返回默认首页
+function defaultHome(role) {
+  return role === '普通用户' ? '/home' : '/admin/users'
+}
+
+// 路由守卫：除登录页外，未登录/登录失效一律回到登录页
 router.beforeEach((to, from, next) => {
-  if (to.meta.public || to.path === '/login') {
+  const auth = readAuth()
+  const loggedIn = !!auth && !!auth.token && !isTokenExpired(auth.token)
+
+  if (to.path === '/login') {
+    // 已登录时不再重复展示登录页
+    if (loggedIn) {
+      next(defaultHome(auth.role))
+      return
+    }
     next()
     return
   }
-  const auth = localStorage.getItem('security_auth') || sessionStorage.getItem('security_auth')
-  if (!auth) {
+
+  if (to.meta.public) {
+    next()
+    return
+  }
+
+  if (!loggedIn) {
+    clearAuth()
     next({ path: '/login', query: { redirect: to.fullPath } })
     return
   }
+
   // 角色校验
-  if (to.meta.roles && to.meta.roles.length) {
-    const role = getCurrentRole()
-    if (!to.meta.roles.includes(role)) {
-      next('/home') // 没权限踢回首页
-      return
-    }
+  if (to.meta.roles && to.meta.roles.length && !to.meta.roles.includes(auth.role || '')) {
+    next(defaultHome(auth.role))
+    return
   }
+
   next()
 })
 

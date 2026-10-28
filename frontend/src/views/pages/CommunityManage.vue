@@ -107,7 +107,20 @@ onMounted(loadData)
 
 <template>
   <div>
-    <div class="page-title">社区管理</div>
+    <div class="page-header">
+      <div class="page-title">社区管理</div>
+      <div class="page-sub">
+        <svg class="sub-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 21h18"></path>
+          <path d="M5 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16"></path>
+          <path d="M15 9h2a2 2 0 0 1 2 2v10"></path>
+          <line x1="9" y1="7" x2="9" y2="7.01"></line>
+          <line x1="9" y1="11" x2="9" y2="11.01"></line>
+          <line x1="9" y1="15" x2="9" y2="15.01"></line>
+        </svg>
+        <span>社区信息与数据范围管理</span>
+      </div>
+    </div>
 
     <!-- 搜索栏 -->
     <div class="search-bar">
@@ -178,36 +191,10 @@ onMounted(loadData)
 </template>
 
 <style scoped>
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-main);
-  margin-bottom: 16px;
-  letter-spacing: 1px;
-}
-
-.search-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: var(--card-bg);
-  border-radius: 10px;
-  padding: 14px 18px;
-  box-shadow: 0 1px 3px var(--shadow);
-  margin-bottom: 14px;
-}
-.spacer { flex: 1; }
-
-.table-card {
-  background: var(--card-bg);
-  border-radius: 10px;
-  padding: 18px;
-  box-shadow: 0 1px 3px var(--shadow);
-}
 
 .pager {
   display: flex;
   justify-content: flex-end;
-  margin-top: 14px;
+  margin-top: 12px;
 }
 </style>

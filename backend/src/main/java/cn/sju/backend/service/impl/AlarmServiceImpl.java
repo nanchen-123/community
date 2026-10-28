@@ -20,8 +20,20 @@ public class AlarmServiceImpl implements AlarmService {
 
     @Override
     public IPage<Alarm> page(Integer pageNum, Integer pageSize, Alarm query) {
+        return page(pageNum, pageSize, query, null, null);
+    }
+
+    @Override
+    public IPage<Alarm> page(Integer pageNum, Integer pageSize, Alarm query, String startTime, String endTime) {
         IPage<Alarm> page = new Page<>(pageNum, pageSize);
         QueryWrapper<Alarm> wrapper = new QueryWrapper<>(query);
+        if (startTime != null && !startTime.isBlank()) {
+            wrapper.ge("find_time", startTime);
+        }
+        if (endTime != null && !endTime.isBlank()) {
+            wrapper.le("find_time", endTime);
+        }
+        wrapper.orderByDesc("find_time");
         return alarmMapper.selectPage(page, wrapper);
     }
 

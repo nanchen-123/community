@@ -7,6 +7,8 @@ import { communityState, loadCommunities, communityName, getAuth } from '../../s
 // 当前登录身份
 const auth = getAuth()
 const isSuperAdmin = auth.role === '超级管理员'
+// 管理端（管理员/超级管理员）才可新增设备，普通用户仅查看
+const isAdminView = auth.role === '超级管理员' || auth.role === '管理员'
 const myCommunityId = auth.communityId || null
 
 const statusOptions = ['在线', '离线', '维护']
@@ -153,7 +155,24 @@ onMounted(() => {
 
 <template>
   <div>
-    <div class="page-title">设备管理</div>
+    <div class="page-header">
+      <div class="page-title">设备管理</div>
+      <div class="page-sub">
+        <svg class="sub-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+          <rect x="9" y="9" width="6" height="6"></rect>
+          <line x1="9" y1="1" x2="9" y2="4"></line>
+          <line x1="15" y1="1" x2="15" y2="4"></line>
+          <line x1="9" y1="20" x2="9" y2="23"></line>
+          <line x1="15" y1="20" x2="15" y2="23"></line>
+          <line x1="20" y1="9" x2="23" y2="9"></line>
+          <line x1="20" y1="14" x2="23" y2="14"></line>
+          <line x1="1" y1="9" x2="4" y2="9"></line>
+          <line x1="1" y1="14" x2="4" y2="14"></line>
+        </svg>
+        <span>设备信息、运行状态与在线情况管理</span>
+      </div>
+    </div>
 
     <!-- 搜索栏 -->
     <div class="search-bar">
@@ -177,7 +196,7 @@ onMounted(() => {
       <el-button type="primary" :icon="Search" @click="onSearch">查询</el-button>
       <el-button :icon="Refresh" @click="onReset">重置</el-button>
       <div class="spacer"></div>
-      <el-button type="primary" :icon="Plus" @click="openAdd">新增设备</el-button>
+      <el-button v-if="isAdminView" type="primary" :icon="Plus" @click="openAdd">新增设备</el-button>
     </div>
 
     <!-- 表格 -->
@@ -274,33 +293,9 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-main);
-  margin-bottom: 16px;
-  letter-spacing: 1px;
-}
-.search-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: var(--card-bg);
-  border-radius: 10px;
-  padding: 14px 18px;
-  box-shadow: 0 1px 3px var(--shadow);
-  margin-bottom: 14px;
-}
-.spacer { flex: 1; }
-.table-card {
-  background: var(--card-bg);
-  border-radius: 10px;
-  padding: 18px;
-  box-shadow: 0 1px 3px var(--shadow);
-}
 .pager {
   display: flex;
   justify-content: flex-end;
-  margin-top: 14px;
+  margin-top: 12px;
 }
 </style>

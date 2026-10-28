@@ -55,6 +55,13 @@ public class SysUserController {
     @Operation(summary = "新增用户")
     @PostMapping
     public Result<Boolean> save(@RequestBody SysUser entity) {
+        // 账号唯一性校验
+        if (entity.getUserName() != null && !entity.getUserName().isBlank()) {
+            SysUser exist = sysUserService.getByUserName(entity.getUserName());
+            if (exist != null) {
+                throw new BusinessException(400, "账号已存在，不允许重复");
+            }
+        }
         if (entity.getPassword() != null && !entity.getPassword().isBlank()) {
             entity.setPassword(passwordEncoder.encode(entity.getPassword()));
         }
@@ -66,6 +73,13 @@ public class SysUserController {
     @Operation(summary = "修改用户")
     @PutMapping
     public Result<Boolean> updateById(@RequestBody SysUser entity) {
+        // 账号唯一性校验：修改后的用户名不能与其他用户重复
+        if (entity.getUserName() != null && !entity.getUserName().isBlank()) {
+            SysUser exist = sysUserService.getByUserName(entity.getUserName());
+            if (exist != null && !exist.getUserId().equals(entity.getUserId())) {
+                throw new BusinessException(400, "账号已存在，不允许重复");
+            }
+        }
         // 系统至少保留一个可用的超级管理员：不能降级/禁用最后一个超管
         SysUser old = entity.getUserId() == null ? null : sysUserService.getById(entity.getUserId());
         if (old != null && "超级管理员".equals(old.getRole())) {

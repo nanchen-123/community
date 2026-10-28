@@ -83,7 +83,7 @@ public class AuthController {
         user.setCommunityId(registerDTO.getCommunityId());
         user.setPhone(registerDTO.getPhone());
         user.setName(registerDTO.getName());
-        user.setRole(registerDTO.getRole() == null ? "普通用户" : registerDTO.getRole());
+        user.setRole("普通用户");
         user.setAccountStatus("正常");
         sysUserMapper.insert(user);
         return Result.success(user.getUserId());

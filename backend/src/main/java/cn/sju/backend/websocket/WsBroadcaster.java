@@ -47,6 +47,11 @@ public class WsBroadcaster {
         broadcast(WsEventType.TASK_STATUS, data);
     }
 
+    /** 下发巡检任务给机器人，触发 SLAM 巡逻 */
+    public void sendTaskDispatch(Object data) {
+        broadcast(WsEventType.TASK_DISPATCH, data);
+    }
+
     public void sendTaskProgress(Object data) {
         broadcast(WsEventType.TASK_PROGRESS, data);
     }

@@ -7,6 +7,8 @@ import { communityState, loadCommunities, communityName, getAuth } from '../../s
 // 当前登录身份
 const auth = getAuth()
 const isSuperAdmin = auth.role === '超级管理员'
+// 管理端（管理员/超级管理员）才可新增居民，普通用户仅查看
+const isAdminView = auth.role === '超级管理员' || auth.role === '管理员'
 const myCommunityId = auth.communityId || null
 
 /* ====== 表格数据 ====== */
@@ -167,7 +169,18 @@ onMounted(() => {
 
 <template>
   <div>
-    <div class="page-title">居民管理</div>
+    <div class="page-header">
+      <div class="page-title">居民管理</div>
+      <div class="page-sub">
+        <svg class="sub-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+          <circle cx="9" cy="7" r="4"></circle>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+        </svg>
+        <span>社区居民信息与居住状态管理</span>
+      </div>
+    </div>
 
     <!-- 搜索栏 -->
     <div class="search-bar">
@@ -191,7 +204,7 @@ onMounted(() => {
       <el-button type="primary" :icon="Search" @click="onSearch">查询</el-button>
       <el-button :icon="Refresh" @click="onReset">重置</el-button>
       <div class="spacer"></div>
-      <el-button type="primary" :icon="Plus" @click="openAdd">新增住户</el-button>
+      <el-button v-if="isAdminView" type="primary" @click="openAdd">新增居民</el-button>
     </div>
 
     <!-- 表格 -->
@@ -304,35 +317,3 @@ onMounted(() => {
     </el-dialog>
   </div>
 </template>
-
-<style scoped>
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-main);
-  margin-bottom: 16px;
-  letter-spacing: 1px;
-}
-.search-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: var(--card-bg);
-  border-radius: 10px;
-  padding: 14px 18px;
-  box-shadow: 0 1px 3px var(--shadow);
-  margin-bottom: 14px;
-}
-.spacer { flex: 1; }
-.table-card {
-  background: var(--card-bg);
-  border-radius: 10px;
-  padding: 18px;
-  box-shadow: 0 1px 3px var(--shadow);
-}
-.pager {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 14px;
-}
-</style>

@@ -251,7 +251,18 @@ onMounted(() => {
 
 <template>
   <div>
-    <div class="page-title">用户管理</div>
+    <div class="page-header">
+      <div class="page-title">用户管理</div>
+      <div class="page-sub">
+        <svg class="sub-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+          <circle cx="9" cy="7" r="4"></circle>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+        </svg>
+        <span>社区账号、角色与权限管理</span>
+      </div>
+    </div>
 
     <!-- 搜索栏 -->
     <div class="search-bar">
@@ -382,37 +393,11 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #1E3A40;
-  margin-bottom: 16px;
-  letter-spacing: 1px;
-}
-
-.search-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: #fff;
-  border-radius: 10px;
-  padding: 14px 18px;
-  box-shadow: 0 1px 3px rgba(15, 30, 40, 0.05);
-  margin-bottom: 14px;
-}
-.spacer { flex: 1; }
-
-.table-card {
-  background: #fff;
-  border-radius: 10px;
-  padding: 18px;
-  box-shadow: 0 1px 3px rgba(15, 30, 40, 0.05);
-}
 
 .pager {
   display: flex;
   justify-content: flex-end;
-  margin-top: 14px;
+  margin-top: 12px;
 }
 </style>
 

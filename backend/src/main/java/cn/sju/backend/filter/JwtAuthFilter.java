@@ -36,6 +36,11 @@ public class JwtAuthFilter implements Filter {
             chain.doFilter(request, response);
             return;
         }
+        // 抓拍图片由 <img> 直接加载，无法携带 Authorization 头，仅放行静态读
+        if (uri.startsWith("/uploads/") && "GET".equalsIgnoreCase(httpRequest.getMethod())) {
+            chain.doFilter(request, response);
+            return;
+        }
 
         String token = extractToken(httpRequest);
         if (!StringUtils.hasText(token) || !jwtUtil.validateToken(token)) {

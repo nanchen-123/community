@@ -27,10 +27,11 @@ public class AiRecognizeClient {
      *
      * @param imagePath  图片路径（相对或绝对路径）
      * @param detectType 检测类型
+     * @param source     图片来源: board（T5AI-Board 板子）/ local（robot_client 本地摄像头）
      * @return AI 返回结果
      */
-    public Map<String, Object> recognize(String imagePath, String detectType) {
-        AiRecognizeRequest request = new AiRecognizeRequest(imagePath, detectType);
+    public Map<String, Object> recognize(String imagePath, String detectType, String source) {
+        AiRecognizeRequest request = new AiRecognizeRequest(imagePath, detectType, source);
         try {
             ResponseEntity<Map> response = restTemplate.postForEntity(aiUrl, request, Map.class);
             return response.getBody();

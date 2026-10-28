@@ -47,6 +47,12 @@ public class Task implements Serializable {
     /** 循环次数 */
     private Integer loops;
 
+    /** 巡检进度（0-100） */
+    private Integer progress;
+
+    /** 巡检开始时间 */
+    private LocalDateTime startTime;
+
     /** 创建时间 */
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;

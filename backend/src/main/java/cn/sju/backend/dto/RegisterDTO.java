@@ -24,6 +24,4 @@ public class RegisterDTO implements Serializable {
     private String phone;
 
     private String name;
-
-    private String role;
 }

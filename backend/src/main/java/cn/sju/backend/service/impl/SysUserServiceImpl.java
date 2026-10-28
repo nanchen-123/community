@@ -31,6 +31,13 @@ public class SysUserServiceImpl implements SysUserService {
     }
 
     @Override
+    public SysUser getByUserName(String userName) {
+        QueryWrapper<SysUser> wrapper = new QueryWrapper<>();
+        wrapper.eq("user_name", userName);
+        return sysUserMapper.selectOne(wrapper);
+    }
+
+    @Override
     public boolean save(SysUser entity) {
         return sysUserMapper.insert(entity) > 0;
     }

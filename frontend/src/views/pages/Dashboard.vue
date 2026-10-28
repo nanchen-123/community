@@ -1,66 +1,521 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import * as echarts from 'echarts/core'
+import { BarChart, PieChart } from 'echarts/charts'
+import { TooltipComponent, GridComponent, LegendComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+import request from '../../api/request'
+import { getAuth, communityState, loadCommunities } from '../../stores/community'
 
-// Dashboard 统计
-const stats = reactive({
-  community: '--',
-  device: '--',
-  task: '--',
-  alarm: '--'
+echarts.use([BarChart, PieChart, TooltipComponent, GridComponent, LegendComponent, CanvasRenderer])
+
+const router = useRouter()
+const chartRef = ref(null)
+let chartInstance = null
+
+const auth = getAuth()
+const isSuperAdmin = auth.role === '超级管理员'
+const myCommunityId = auth.communityId || null
+
+const robot = reactive({
+  online: false,
+  location: '',
+  task: ''
 })
 
-// 实时告警（模拟，后续接 WS）
-const recentAlarms = ref([])
+const stats = reactive({
+  alarmTotal: 0,
+  plateTotal: 0,
+  inspect: 0
+})
+const statusStats = reactive({ 未处理: 0, 已处理: 0, 已忽略: 0 })
+const chartDim = ref('type')
+const chartType = ref('bar')
+
+const captureImage = ref('')
+const captureMeta = reactive({ title: '', subtitle: '', time: '' })
+const captureDisplayMeta = computed(() => ({
+  title: captureMeta.title,
+  subtitle: captureMeta.subtitle,
+  time: captureMeta.time
+}))
+
+// 告警类型与级别
+const TYPE_LABEL = { 人员异常: '人员异常', 消防安全: '消防安全', 其他: '其他' }
+const TYPE_LEVEL = { 消防安全: '严重', 人员异常: '警告', 其他: '一般' }
+const levelClassMap = { 严重: 'danger', 警告: 'warn', 一般: 'normal', 高: 'danger', 中: 'warn', 低: 'normal' }
+
+const alarmList = ref([])
+
+function _readKey() {
+  const a = getAuth()
+  const id = a?.username || a?.userName || a?.userId || 'anonymous'
+  return 'security_alarm_read_' + String(id).replace(/[^\w-]/g, '_')
+}
+function _loadReadIds() {
+  try {
+    const raw = localStorage.getItem(_readKey()) || '[]'
+    const s = new Set(JSON.parse(raw))
+    if (s.size > 2000) {
+      const arr = [...s].slice(-1000)
+      localStorage.setItem(_readKey(), JSON.stringify(arr))
+      return new Set(arr)
+    }
+    return s
+  } catch {
+    return new Set()
+  }
+}
+function _saveReadIds(set) {
+  try { localStorage.setItem(_readKey(), JSON.stringify([...set])) } catch {}
+}
+const readIds = ref(_loadReadIds())
+const readVersion = ref(0)
+
+const visibleAlarmList = computed(() => {
+  readVersion.value
+  const set = readIds.value
+  return alarmList.value
+    .filter(a => !set.has(Number(a.id)) && !set.has(String(a.id)))
+    .slice(0, 10)
+})
+
+const unreadCount = computed(() => visibleAlarmList.value.length)
+
+function levelClass(level) {
+  return levelClassMap[level] || 'normal'
+}
+
+function markAllRead() {
+  const set = readIds.value
+  visibleAlarmList.value.forEach(a => {
+    set.add(Number(a.id))
+    set.add(String(a.id))
+  })
+  _saveReadIds(set)
+  readVersion.value++
+}
+
+function goRecord(item) {
+  const set = readIds.value
+  set.add(Number(item.id))
+  set.add(String(item.id))
+  _saveReadIds(set)
+  readVersion.value++
+  router.push('/alarm')
+}
+
+// 数据范围：超管看全部（跟随顶栏社区筛选），管理员/普通用户只看所属社区
+function scopeParams() {
+  if (isSuperAdmin) {
+    return communityState.selectedId ? { communityId: communityState.selectedId } : {}
+  }
+  return myCommunityId ? { communityId: myCommunityId } : {}
+}
+
+function todayRange() {
+  const now = new Date()
+  const pad = n => String(n).padStart(2, '0')
+  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+  return { startTime: `${date} 00:00:00`, endTime: `${date} 23:59:59`, date }
+}
+
+function fmtTime(value) {
+  if (!value) return ''
+  const s = String(value).replace('T', ' ')
+  return s.length >= 16 ? s.slice(5, 16) : s
+}
+
+const categoryData = ['人员异常', '消防安全', '其他']
+const statusCategory = [
+  { key: '未处理', label: '未处理', color: '#F59E0B' },
+  { key: '已处理', label: '已处理', color: '#0EA5E9' },
+  { key: '已忽略', label: '已忽略', color: '#80A0A8' }
+]
+const barData = ref([0, 0, 0])
+const statusData = ref([0, 0, 0])
+
+async function loadData() {
+  const scope = scopeParams()
+  const { startTime, endTime, date } = todayRange()
+  try {
+    const [todayAlarms, pendingAlarms, recentAlarms, plates, tasks, robotOverview] = await Promise.all([
+      request.get('/alarm/page', { params: { pageNum: 1, pageSize: 200, ...scope, startTime, endTime } }),
+      request.get('/alarm/page', { params: { pageNum: 1, pageSize: 10, handleStatus: '未处理', ...scope } }),
+      request.get('/alarm/page', { params: { pageNum: 1, pageSize: 20, ...scope } }),
+      request.get('/license-plate/page', { params: { pageNum: 1, pageSize: 200, ...scope } }),
+      request.get('/task/page', { params: { pageNum: 1, pageSize: 200, taskStatus: '已完成', ...scope } }),
+      request.get('/robot-status/overview')
+    ])
+
+    const todayRecords = todayAlarms?.records || []
+    stats.alarmTotal = todayAlarms?.total ?? todayRecords.length
+
+    const plateRecords = plates?.records || []
+    stats.plateTotal = plateRecords.filter(p => String(p.createTime || '').slice(0, 10) === date).length
+
+    const taskRecords = tasks?.records || []
+    stats.inspect = taskRecords.filter(t => String(t.endTime || '').slice(0, 10) === date).length
+
+    // 处理状态分布
+    statusStats.未处理 = 0
+    statusStats.已处理 = 0
+    statusStats.已忽略 = 0
+    todayRecords.forEach(a => {
+      const key = a.handleStatus || '未处理'
+      if (statusStats[key] !== undefined) statusStats[key]++
+    })
+    statusData.value = statusCategory.map(s => statusStats[s.key] || 0)
+
+    // 类型分布
+    const typeCount = {}
+    todayRecords.forEach(a => {
+      const t = TYPE_LABEL[a.alarmType] ? a.alarmType : '其他'
+      typeCount[t] = (typeCount[t] || 0) + 1
+    })
+    barData.value = categoryData.map(t => typeCount[t] || 0)
+
+    // 实时告警列表（未处理）
+    alarmList.value = (pendingAlarms?.records || []).map(a => ({
+      id: a.alarmId,
+      level: a.level || TYPE_LEVEL[a.alarmType] || '一般',
+      type: TYPE_LABEL[a.alarmType] || a.alarmType || '其他',
+      desc: a.remark || a.location || '暂无描述',
+      time: fmtTime(a.findTime)
+    }))
+
+    // 抓拍画面：最近一条带图片的告警
+    const withImg = (recentAlarms?.records || []).find(a => a.imgUrl)
+    if (withImg) {
+      captureImage.value = withImg.imgUrl
+      captureMeta.title = TYPE_LABEL[withImg.alarmType] || withImg.alarmType || '抓拍快照'
+      captureMeta.subtitle = withImg.location || ''
+      captureMeta.time = fmtTime(withImg.findTime)
+    } else {
+      captureImage.value = ''
+      captureMeta.title = ''
+      captureMeta.subtitle = ''
+      captureMeta.time = ''
+    }
+
+    // 机器人状态
+    const robots = robotOverview?.robots || []
+    const r = robots.find(item => item.online) || robots[0]
+    robot.online = !!r?.online
+    if (r) {
+      const pos = r.current_pose?.position
+      robot.location = r.current_waypoint
+        || (pos ? `${Number(pos.x).toFixed(2)}, ${Number(pos.y).toFixed(2)}` : '--')
+      robot.task = r.current_task_name || r.current_task_id || '待命'
+    }
+
+    if (chartInstance) renderChart()
+  } catch (e) {
+    console.error('首页数据加载失败:', e)
+  }
+}
+
+function initChart() {
+  if (!chartRef.value) return
+  const rect = chartRef.value.getBoundingClientRect()
+  if (rect.width < 10 || rect.height < 10) return
+  if (chartInstance) { chartInstance.dispose(); chartInstance = null }
+  chartInstance = echarts.init(chartRef.value)
+  renderChart()
+}
+
+function renderChart() {
+  if (!chartInstance) return
+  const isType = chartDim.value === 'type'
+  const labels = isType ? categoryData : statusCategory.map(s => s.label)
+  const dataArr = isType ? barData.value : statusData.value
+  const colors = isType
+    ? ['#00A0C0', '#EF4444', '#80A0A8']
+    : statusCategory.map(s => s.color)
+
+  let option
+  if (chartType.value === 'bar') {
+    option = {
+      grid: { top: 30, left: 40, right: 20, bottom: 40 },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      xAxis: {
+        type: 'category',
+        data: labels,
+        axisLabel: { color: 'var(--text-sub)', fontSize: 12, interval: 0 }
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: { color: 'var(--text-sub)' },
+        splitLine: { lineStyle: { color: '#E8EDEF' } }
+      },
+      series: [{
+        type: 'bar',
+        barWidth: '45%',
+        data: dataArr.map((v, i) => ({
+          value: v,
+          itemStyle: { color: colors[i], borderRadius: [4, 4, 0, 0] }
+        })),
+        label: { show: true, position: 'top', color: '#406070', fontSize: 12, fontWeight: 600 }
+      }]
+    }
+  } else {
+    const pieData = labels.map((name, i) => ({
+      name,
+      value: dataArr[i],
+      itemStyle: { color: colors[i] }
+    }))
+    option = {
+      tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+      legend: {
+        bottom: 5,
+        left: 'center',
+        textStyle: { color: 'var(--text-sub)', fontSize: 12 },
+        itemWidth: 10,
+        itemHeight: 10
+      },
+      series: [{
+        type: 'pie',
+        radius: ['42%', '68%'],
+        center: ['50%', '45%'],
+        avoidLabelOverlap: true,
+        itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+        label: { show: true, color: '#406070', fontSize: 12, formatter: '{b}\n{c} ({d}%)' },
+        emphasis: { label: { show: true, fontSize: 13, fontWeight: 600 } },
+        data: pieData
+      }]
+    }
+  }
+  chartInstance.setOption(option, true)
+}
+
+function resizeChart() {
+  chartInstance && chartInstance.resize()
+}
+
+let chartRetryTimer = null
+let pollTimer = null
+
+onMounted(async () => {
+  if (isSuperAdmin) {
+    await loadCommunities()
+  }
+  await loadData()
+  await nextTick()
+  const tryInit = (count = 0) => {
+    initChart()
+    if (!chartInstance && count < 10) {
+      chartRetryTimer = setTimeout(() => tryInit(count + 1), 100)
+    }
+  }
+  tryInit()
+  window.addEventListener('resize', resizeChart)
+  pollTimer = setInterval(loadData, 30000)
+})
+
+onBeforeUnmount(() => {
+  if (chartRetryTimer) clearTimeout(chartRetryTimer)
+  if (pollTimer) clearInterval(pollTimer)
+  window.removeEventListener('resize', resizeChart)
+  if (chartInstance) {
+    chartInstance.dispose()
+    chartInstance = null
+  }
+})
+
+// 超级管理员切换顶栏社区时刷新
+watch(() => communityState.selectedId, () => {
+  loadData()
+})
 </script>
 
 <template>
   <div>
-    <div class="page-title">首页概览</div>
-
-    <!-- 统计卡片 -->
-    <div class="stat-row">
-      <div class="stat-card" v-for="(s, i) in [
-        { label: '小区数量', value: stats.community, statKey: 'primary', icon: 'OfficeBuilding' },
-        { label: '设备总数', value: stats.device, statKey: 'secondary', icon: 'Cpu' },
-        { label: '巡检任务', value: stats.task, statKey: 'tertiary', icon: 'Tickets' },
-        { label: '今日告警', value: stats.alarm, statKey: 'danger', icon: 'Warning' }
-      ]" :key="s.label" :style="{ ['--stat-color']:
-        s.statKey === 'primary' ? 'var(--stat-primary)' :
-        s.statKey === 'secondary' ? 'var(--stat-secondary)' :
-        s.statKey === 'tertiary' ? 'var(--stat-tertiary)' :
-        '#EF4444'
-      }">
-        <div class="stat-icon">
-          <el-icon :size="24"><component :is="s.icon" /></el-icon>
-        </div>
-        <div class="stat-info">
-          <div class="stat-value">{{ s.value }}</div>
-          <div class="stat-label">{{ s.label }}</div>
-        </div>
+    <div class="page-header">
+      <div class="page-title">首页概览</div>
+      <div class="page-sub">
+        <svg class="sub-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="9"></rect>
+          <rect x="14" y="3" width="7" height="5"></rect>
+          <rect x="14" y="12" width="7" height="9"></rect>
+          <rect x="3" y="16" width="7" height="5"></rect>
+        </svg>
+        <span>社区运行状态与关键指标一览</span>
       </div>
     </div>
 
-    <!-- 下方两栏 -->
-    <div class="panel-row">
-      <div class="panel">
-        <div class="panel-title">实时告警</div>
-        <div class="panel-body">
-          <el-empty v-if="!recentAlarms.length" description="暂无告警" :image-size="80" />
-          <div v-for="a in recentAlarms" :key="a.id" class="alarm-item">
-            <span class="alarm-dot" :class="a.level === '高' ? 'danger' : 'warn'"></span>
-            <span class="alarm-msg">{{ a.message }}</span>
-            <span class="alarm-time">{{ a.time }}</span>
+    <div class="home-page">
+      <div class="home-main">
+        <div class="row row-top">
+          <div class="card status-card">
+            <div class="card-title">
+              <span class="title-dot"></span>
+              <span>机器人状态</span>
+            </div>
+            <div class="robot-status">
+              <div class="status-line">
+                <span class="status-dot" :class="robot.online ? 'online' : 'offline'"></span>
+                <span class="status-text">{{ robot.online ? '在线' : '离线' }}</span>
+                <span class="status-tag" :class="robot.online ? 'online' : 'offline'">
+                  {{ robot.online ? '运行中' : '已断开' }}
+                </span>
+              </div>
+              <div class="info-line">
+                <span class="info-label">当前位置</span>
+                <span class="info-value">{{ robot.location || '--' }}</span>
+              </div>
+              <div class="info-line">
+                <span class="info-label">执行任务</span>
+                <span class="info-value">{{ robot.task || '待命' }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card stat-card">
+            <div class="card-title">
+              <span class="title-dot"></span>
+              <span>今日数据统计</span>
+            </div>
+            <div class="stat-list">
+              <div class="stat-item">
+                <div class="stat-icon warn">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/>
+                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                  </svg>
+                </div>
+                <div class="stat-num warn">{{ stats.alarmTotal }}</div>
+                <div class="stat-label">今日告警</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-icon danger">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="1" y="3" width="15" height="13"/>
+                    <path d="M16 8h4l3 3v5h-7V8z"/>
+                    <circle cx="5.5" cy="18.5" r="2.5"/>
+                    <circle cx="18.5" cy="18.5" r="2.5"/>
+                  </svg>
+                </div>
+                <div class="stat-num danger">{{ stats.plateTotal }}</div>
+                <div class="stat-label">车牌识别</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-icon success">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                    <polyline points="22 4 12 14.01 9 11.01"/>
+                  </svg>
+                </div>
+                <div class="stat-num success">{{ stats.inspect }}</div>
+                <div class="stat-label">巡检完成</div>
+              </div>
+            </div>
+            <div class="status-capsules">
+              <div class="capsule pending">
+                <div class="capsule-dot"></div>
+                <div class="capsule-body">
+                  <div class="capsule-num">{{ statusStats.未处理 }}</div>
+                  <div class="capsule-label">未处理</div>
+                </div>
+              </div>
+              <div class="capsule resolved">
+                <div class="capsule-dot"></div>
+                <div class="capsule-body">
+                  <div class="capsule-num">{{ statusStats.已处理 }}</div>
+                  <div class="capsule-label">已处理</div>
+                </div>
+              </div>
+              <div class="capsule closed">
+                <div class="capsule-dot"></div>
+                <div class="capsule-body">
+                  <div class="capsule-num">{{ statusStats.已忽略 }}</div>
+                  <div class="capsule-label">已忽略</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row row-bottom">
+          <div class="card image-card">
+            <div class="card-title">
+              <span class="title-dot"></span>
+              <span>机器人抓拍画面</span>
+              <span class="live-tag" :class="{ offline: !robot.online }">
+                <span class="live-dot"></span>
+                {{ robot.online ? 'LIVE' : '离线' }}
+              </span>
+            </div>
+            <div class="image-wrap">
+              <img v-if="captureImage" :src="captureImage" alt="抓拍画面" />
+              <div v-else class="placeholder">
+                <div class="ph-icon">📷</div>
+                <div class="ph-text">{{ robot.online ? '等待画面推送...' : '机器人离线，暂无画面' }}</div>
+              </div>
+            </div>
+            <div v-if="captureDisplayMeta.title || captureDisplayMeta.subtitle" class="capture-meta">
+              <div class="cm-title" :class="{ unknown: !captureDisplayMeta.title }">
+                {{ captureDisplayMeta.title || '抓拍快照' }}
+                <span v-if="captureDisplayMeta.time" class="cm-time">{{ captureDisplayMeta.time }}</span>
+              </div>
+              <div v-if="captureDisplayMeta.subtitle" class="cm-sub">{{ captureDisplayMeta.subtitle }}</div>
+            </div>
+          </div>
+
+          <div class="card chart-card">
+            <div class="card-title">
+              <span class="title-dot"></span>
+              <span>告警分布统计</span>
+              <div class="chart-switches">
+                <div class="seg">
+                  <button :class="{ active: chartDim === 'type' }" @click="chartDim = 'type'; renderChart()">按类型</button>
+                  <button :class="{ active: chartDim === 'status' }" @click="chartDim = 'status'; renderChart()">按状态</button>
+                </div>
+                <div class="seg">
+                  <button :class="{ active: chartType === 'bar' }" @click="chartType = 'bar'; renderChart()">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="6" width="4" height="15"/><rect x="17" y="3" width="4" height="18"/></svg>
+                  </button>
+                  <button :class="{ active: chartType === 'pie' }" @click="chartType = 'pie'; renderChart()">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div ref="chartRef" class="chart-wrap"></div>
           </div>
         </div>
       </div>
 
-      <div class="panel">
-        <div class="panel-title">系统概览</div>
-        <div class="panel-body overview">
-          <p>系统运行正常</p>
-          <p>机器人在线：--</p>
-          <p>今日巡检完成：--</p>
-          <p>待处理告警：--</p>
+      <div class="home-side">
+        <div class="card alarm-card">
+          <div class="card-title">
+            <span class="title-dot"></span>
+            <span>实时告警</span>
+            <div class="alarm-actions">
+              <router-link v-if="unreadCount > 0" to="/alarm" class="unread-badge">
+                {{ unreadCount > 99 ? '99+' : unreadCount }}
+              </router-link>
+              <button class="btn-read" @click="markAllRead">一键已读</button>
+            </div>
+          </div>
+          <div class="alarm-list">
+            <div
+              v-for="item in visibleAlarmList"
+              :key="item.id"
+              class="alarm-item unread"
+              @click="goRecord(item)"
+            >
+              <div class="alarm-level" :class="levelClass(item.level)">{{ item.level }}</div>
+              <div class="alarm-body">
+                <div class="alarm-type">{{ item.type }}</div>
+                <div class="alarm-desc">{{ item.desc }}</div>
+                <div class="alarm-time">{{ item.time }}</div>
+              </div>
+              <span class="red-dot"></span>
+            </div>
+            <div v-if="visibleAlarmList.length === 0" class="empty-tip">暂无未读告警</div>
+          </div>
         </div>
       </div>
     </div>
@@ -68,111 +523,331 @@ const recentAlarms = ref([])
 </template>
 
 <style scoped>
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-main);
-  margin-bottom: 20px;
-  letter-spacing: 1px;
+.home-page {
+  display: flex;
+  gap: 12px;
+  min-height: 100%;
+  box-sizing: border-box;
 }
 
-.stat-row {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin-bottom: 20px;
+.home-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
-.stat-card {
-  background: var(--card-bg);
+
+.home-side {
+  width: 300px;
+  flex-shrink: 0;
+}
+
+.card {
+  display: block;
+  background: #FFFFFF;
   border-radius: 10px;
-  padding: 20px;
+  border: 1px solid #E8EDEF;
+  padding: 14px;
+  box-sizing: border-box;
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+
+.stat-card:hover {
+  transform: none;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+}
+.row > .card {
+  flex: 1;
+  min-width: 0;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: 10px;
   display: flex;
   align-items: center;
-  gap: 16px;
-  box-shadow: 0 1px 3px var(--shadow);
-  transition: transform 0.2s, box-shadow 0.2s;
+  gap: 8px;
+  flex-wrap: wrap;
 }
-.stat-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px var(--shadow-hover);
+.title-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  flex-shrink: 0;
+}
+
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot.online { background: #22C55E; }
+.status-dot.offline { background: #80A0A8; }
+.status-text { font-weight: 600; color: var(--text-main); font-size: 14px; }
+.status-tag {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 8px;
+}
+.status-tag.online { color: #16A34A; background: rgba(34, 197, 94, 0.1); }
+.status-tag.offline { color: var(--text-sub); background: #F0F4F5; }
+
+.info-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 0;
+  border-top: 1px solid #F0F4F5;
+  font-size: 13px;
+}
+.info-label { color: var(--text-sub); }
+.info-value { color: var(--text-main); font-weight: 500; text-align: right; }
+
+.stat-list {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 10px;
+}
+.stat-item {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+  padding: 10px 6px;
+  border-radius: 8px;
+  background: #F4F9FA;
 }
 .stat-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 10px;
+  width: 32px;
+  height: 32px;
+  margin: 0 auto 6px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #fff;
-  flex-shrink: 0;
-  background: var(--stat-color);
 }
-.stat-info { flex: 1; }
-.stat-value {
-  font-size: 26px;
-  font-weight: 700;
-  color: var(--text-main);
-  line-height: 1.2;
-}
-.stat-label {
-  font-size: 13px;
-  color: var(--text-soft);
-  margin-top: 4px;
-}
+.stat-icon.warn { background: #F59E0B; }
+.stat-icon.danger { background: #EF4444; }
+.stat-icon.success { background: #10B981; }
+.stat-num { font-size: 22px; font-weight: 700; line-height: 1.1; }
+.stat-num.warn { color: #F59E0B; }
+.stat-num.danger { color: #EF4444; }
+.stat-num.success { color: #10B981; }
+.stat-label { font-size: 12px; color: var(--text-sub); margin-top: 3px; }
 
-.panel-row {
+.status-capsules {
   display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: 16px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid #F0F4F5;
 }
-.panel {
-  background: var(--card-bg);
-  border-radius: 10px;
-  box-shadow: 0 1px 3px var(--shadow);
-  overflow: hidden;
-}
-.panel-title {
-  padding: 14px 20px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-main);
-  border-bottom: 1px solid var(--border-deep);
-}
-.panel-body { padding: 16px 20px; min-height: 260px; }
-
-.alarm-item {
+.capsule {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 0;
-  border-bottom: 1px dashed var(--border-deep);
-  font-size: 13px;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #F4F9FA;
 }
-.alarm-item:last-child { border-bottom: none; }
-.alarm-dot {
+.capsule-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  background: currentColor;
   flex-shrink: 0;
 }
-.alarm-dot.danger { background: #EF4444; box-shadow: 0 0 6px rgba(239, 68, 68, 0.4); }
-.alarm-dot.warn   { background: #F59E0B; box-shadow: 0 0 6px rgba(245, 158, 11, 0.4); }
-.alarm-msg { flex: 1; color: var(--text-sub); }
-.alarm-time { color: var(--text-soft); font-size: 12px; }
+.capsule.pending { color: #F59E0B; }
+.capsule.resolved { color: #0EA5E9; }
+.capsule.closed { color: #80A0A8; }
+.capsule-body { flex: 1; min-width: 0; }
+.capsule-num { font-size: 16px; font-weight: 700; color: var(--text-main); line-height: 1.1; }
+.capsule-label { font-size: 11px; color: var(--text-sub); margin-top: 2px; }
 
-.overview p {
-  margin: 0 0 12px;
-  font-size: 14px;
-  color: var(--text-sub);
+.chart-switches {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.seg {
+  display: inline-flex;
+  background: #F4F9FA;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.seg button {
+  background: transparent;
+  border: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-sub);
+  cursor: pointer;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.seg button.active {
+  background: #006080;
+  color: #fff;
+  font-weight: 600;
 }
 
-@media (max-width: 960px) {
-  .stat-row { grid-template-columns: repeat(2, 1fr); }
-  .panel-row { grid-template-columns: 1fr; }
+.live-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: #22C55E;
+  color: #fff;
+  font-weight: 600;
+  margin-left: auto;
 }
-@media (max-width: 600px) {
-  .stat-row { grid-template-columns: 1fr; }
+.live-tag.offline { background: #80A0A8; }
+.live-dot { width: 5px; height: 5px; border-radius: 50%; background: #fff; }
+
+.image-wrap {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #F1F7F8;
+  border: 1px solid #E8EDEF;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.image-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.capture-meta {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #F4F9FA;
+}
+.cm-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: #006080;
+}
+.cm-title.unknown { color: #335B66; }
+.cm-time { font-weight: 400; font-size: 11px; color: #80A0A8; }
+.cm-sub { margin-top: 4px; font-size: 12px; color: #4A626B; line-height: 1.5; }
+
+.placeholder { color: #80A0A8; text-align: center; }
+.ph-icon { font-size: 40px; opacity: 0.6; margin-bottom: 8px; }
+.ph-text { font-size: 13px; }
+
+.chart-wrap { width: 100%; height: 260px; min-height: 220px; }
+
+.alarm-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 360px;
+}
+.alarm-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.unread-badge {
+  background: #EF4444;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-decoration: none;
+  min-width: 18px;
+  text-align: center;
+}
+.btn-read {
+  border: 1px solid #D0E0E4;
+  background: #fff;
+  color: #406070;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.btn-read:hover { background: #F4F9FA; color: #006080; }
+
+.alarm-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+.alarm-list::-webkit-scrollbar { width: 5px; }
+.alarm-list::-webkit-scrollbar-thumb { background: #C0D0D8; border-radius: 3px; }
+
+.alarm-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #F0F4F5;
+  cursor: pointer;
+  margin-bottom: 6px;
+  background: #fff;
+}
+.alarm-item.unread {
+  background: #F4F9FA;
+  border-color: #C0E0E8;
+}
+.alarm-item:hover { background: #E6F4F8; }
+
+.red-dot { width: 6px; height: 6px; background: #EF4444; border-radius: 50%; margin-top: 5px; margin-left: auto; flex-shrink: 0; }
+
+.alarm-level { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 5px; white-space: nowrap; }
+.alarm-level.danger { background: #FEE2E2; color: #DC2626; }
+.alarm-level.warn { background: #FEF3C7; color: #D97706; }
+.alarm-level.normal { background: #E0F2FE; color: #006080; }
+
+.alarm-body { flex: 1; min-width: 0; }
+.alarm-type { font-size: 13px; font-weight: 600; color: var(--text-main); margin-bottom: 2px; }
+.alarm-desc { font-size: 12px; color: var(--text-sub); line-height: 1.4; margin-bottom: 3px; }
+.alarm-time { font-size: 11px; color: #80A0A8; }
+
+.empty-tip { margin: auto; padding: 40px 0; text-align: center; color: #80A0A8; font-size: 13px; }
+
+@media (max-width: 1100px) {
+  .home-side { width: 260px; }
+}
+@media (max-width: 900px) {
+  .home-page { flex-direction: column; }
+  .home-side { width: 100%; }
+  .row { flex-direction: column; }
+  .status-capsules { grid-template-columns: repeat(3, 1fr); }
 }
 </style>

@@ -12,6 +12,9 @@ public interface SysUserService {
 
     SysUser getById(Long id);
 
+    /** 根据用户名查询用户（用于账号唯一性校验） */
+    SysUser getByUserName(String userName);
+
     boolean save(SysUser entity);
 
     boolean updateById(SysUser entity);
