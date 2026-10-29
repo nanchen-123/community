@@ -23,13 +23,20 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class PhotoRequestService {
 
+    /** 待人工确认：小车到达航点后创建，等待网页点击「立即拍照」 */
+    private static final String WAITING = "waiting";
     private static final String PENDING = "pending";
     private static final String PROCESSING = "processing";
     private static final String DONE = "done";
     private static final String FAILED = "failed";
+    /** 用户跳过该航点：不拍照，也不做本地识别 */
+    private static final String SKIPPED = "skipped";
 
-    /** 拍照请求有效期：超过该时长仍未处理的请求不再下发给拍照设备 */
+    /** 已放行请求的有效期：超过该时长仍未处理的请求不再下发给拍照设备 */
     private static final long PENDING_TTL_SECONDS = 180;
+
+    /** 待确认请求的有效期：与小车最长等待时长一致，超时后不再展示也不再受理 */
+    private static final long WAITING_TTL_SECONDS = 180;
 
     private final Map<String, PhotoRequest> requests = new ConcurrentHashMap<>();
 
@@ -42,10 +49,10 @@ public class PhotoRequestService {
         request.setSourceRobot(text(body.get("source_robot")));
         request.setTargetRobot(text(body.get("target_robot")));
         request.setCoordinate(body.get("coordinate"));
-        request.setStatus(PENDING);
+        request.setStatus(WAITING);
         request.setCreatedAt(LocalDateTime.now());
         requests.put(request.getRequestId(), request);
-        log.info("创建拍照请求: requestId={}, waypoint={}, detectType={}, target={}",
+        log.info("创建拍照请求（待人工确认）: requestId={}, waypoint={}, detectType={}, target={}",
                 request.getRequestId(), request.getWaypoint(), request.getDetectType(), request.getTargetRobot());
         return request;
     }
@@ -66,7 +73,10 @@ public class PhotoRequestService {
             if (!PENDING.equals(request.getStatus())) {
                 continue;
             }
-            if (request.getCreatedAt() != null && request.getCreatedAt().isBefore(expireBefore)) {
+            // 有效期从「用户放行」开始计算，避免用户在页面停留过久导致请求一放行就过期
+            LocalDateTime released = request.getReleasedAt() != null
+                    ? request.getReleasedAt() : request.getCreatedAt();
+            if (released != null && released.isBefore(expireBefore)) {
                 continue;
             }
             if (targetRobot != null && !targetRobot.isBlank()
@@ -84,6 +94,73 @@ public class PhotoRequestService {
             result.add(item);
         }
         return result;
+    }
+
+    /**
+     * 网页点击「立即拍照」：waiting → pending
+     * <p>
+     * 放行后拍照设备下一轮轮询即可领取；重复点击只有第一次生效。
+     */
+    public boolean confirm(String requestId) {
+        PhotoRequest request = requests.get(requestId);
+        if (request == null) {
+            return false;
+        }
+        synchronized (request) {
+            if (!WAITING.equals(request.getStatus())) {
+                return false;
+            }
+            request.setStatus(PENDING);
+            request.setReleasedAt(LocalDateTime.now());
+        }
+        log.info("用户确认拍照，已放行给拍照设备: requestId={}", requestId);
+        return true;
+    }
+
+    /**
+     * 网页点击「跳过该点」：waiting → skipped
+     * <p>
+     * 小车据此放弃该航点，既不触发拍照设备，也不做本地识别。
+     */
+    public boolean skip(String requestId) {
+        PhotoRequest request = requests.get(requestId);
+        if (request == null) {
+            return false;
+        }
+        synchronized (request) {
+            if (!WAITING.equals(request.getStatus())) {
+                return false;
+            }
+            request.setStatus(SKIPPED);
+        }
+        log.info("用户跳过该航点，取消拍照: requestId={}", requestId);
+        return true;
+    }
+
+    /** 仍在等待人工确认、且未超时的请求列表 */
+    public List<PhotoRequest> listWaiting() {
+        LocalDateTime expireBefore = LocalDateTime.now().minusSeconds(WAITING_TTL_SECONDS);
+        List<PhotoRequest> list = new ArrayList<>();
+        for (PhotoRequest request : requests.values()) {
+            if (!WAITING.equals(request.getStatus())) {
+                continue;
+            }
+            if (request.getCreatedAt() != null && request.getCreatedAt().isBefore(expireBefore)) {
+                continue;
+            }
+            list.add(request);
+        }
+        list.sort(Comparator.comparing(PhotoRequest::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder())));
+        return list;
+    }
+
+    /** 供网页展示的请求详情 */
+    public Map<String, Object> toWebPayload(PhotoRequest request) {
+        Map<String, Object> map = toPayload(request);
+        map.put("status", request.getStatus());
+        map.put("created_at", request.getCreatedAt());
+        map.put("released_at", request.getReleasedAt());
+        return map;
     }
 
     /**
@@ -136,7 +213,8 @@ public class PhotoRequestService {
             throw new IllegalArgumentException("拍照请求不存在: " + requestId);
         }
         long deadline = System.currentTimeMillis() + Math.max(0, timeoutMs);
-        while ((PENDING.equals(request.getStatus()) || PROCESSING.equals(request.getStatus()))
+        while ((WAITING.equals(request.getStatus()) || PENDING.equals(request.getStatus())
+                || PROCESSING.equals(request.getStatus()))
                 && System.currentTimeMillis() < deadline) {
             try {
                 Thread.sleep(200);
@@ -159,6 +237,7 @@ public class PhotoRequestService {
         map.put("result", request.getResult());
         map.put("error", request.getError());
         map.put("created_at", request.getCreatedAt());
+        map.put("released_at", request.getReleasedAt());
         return map;
     }
 
@@ -211,5 +290,7 @@ public class PhotoRequestService {
         private Map<String, Object> result;
         private String error;
         private LocalDateTime createdAt;
+        /** 用户点击「立即拍照」的放行时间，空表示尚未确认 */
+        private LocalDateTime releasedAt;
     }
 }

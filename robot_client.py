@@ -240,6 +240,21 @@ class RobotAPIClient:
             return r["request_id"]
         return None
 
+    def get_photo_request_status(self, request_id: str) -> Optional[str]:
+        """查询拍照请求状态，用于驻车等待网页人工确认。
+
+        返回 waiting / pending / processing / done / failed / skipped / not_found，
+        网络异常返回 None。
+        """
+        r = self._request("GET", f"/api/robot/photo-requests/{request_id}")
+        if r and r.get("status"):
+            return str(r["status"])
+        return None
+
+    def skip_photo_request(self, request_id: str) -> None:
+        """撤销拍照请求（等待超时或任务被停止时调用），避免网页上残留待确认卡片。"""
+        self._request("POST", f"/api/robot/photo-requests/{request_id}/skip")
+
 
 class RobotController:
     """ROS 导航 + 三种识别器。"""
@@ -511,6 +526,124 @@ class MissionRunner:
             normalized.append(wp)
         return normalized
 
+    # 已放行（用户在网页点击了「立即拍照」）的状态
+    RELEASED_STATUSES = {"pending", "processing", "done", "failed"}
+
+    def wait_photo_confirm(self, request_id: str, task_id: str,
+                           timeout_sec: float = 180.0,
+                           poll_interval: float = 1.0) -> str:
+        """驻车等待网页人工确认拍照。
+
+        返回:
+          confirmed - 用户点击「立即拍照」，可以执行本地识别
+          skipped   - 用户点击「跳过」，或请求已失效
+          timeout   - 等待超时
+          stopped   - 任务被用户停止
+        """
+        log.info("⏸️ 已到达拍照点，等待网页确认拍照（最多 %.0f 秒）...", timeout_sec)
+        deadline = time.time() + max(0.0, timeout_sec)
+        last_cancel_check = time.time()
+
+        while True:
+            if self.robot.shutdown_flag:
+                return "stopped"
+
+            # 每 3 秒查一次任务是否被停止，避免一直干等
+            now = time.time()
+            if now - last_cancel_check >= 3.0:
+                last_cancel_check = now
+                chk = self.api.get_task_status(task_id)
+                if chk and chk.get("cancelled"):
+                    return "stopped"
+
+            status = self.api.get_photo_request_status(request_id)
+            if status in self.RELEASED_STATUSES:
+                log.info("✅ 网页已确认拍照 (status=%s)，开始本地识别", status)
+                return "confirmed"
+            if status in ("skipped", "not_found"):
+                log.info("⏭️ 拍照请求已跳过 (status=%s)，本航点不做识别", status)
+                return "skipped"
+
+            if time.time() >= deadline:
+                # 超时前最后再确认一次，避免用户卡在临界点点击被漏掉
+                status = self.api.get_photo_request_status(request_id)
+                if status in self.RELEASED_STATUSES:
+                    log.info("✅ 网页已确认拍照 (status=%s)，开始本地识别", status)
+                    return "confirmed"
+                log.warning("⌛ 等待确认拍照超时（%.0f 秒），本航点跳过", timeout_sec)
+                return "timeout"
+
+            time.sleep(poll_interval)
+
+    def wait_photo_done(self, request_id: str, timeout_sec: float = 30.0,
+                        poll_interval: float = 1.0) -> str:
+        """最后一个拍照点：等 T5AI-Board 拍完照、AI 识别落库后再结束任务。
+
+        返回 done / failed / not_found / timeout
+        """
+        log.info("⏳ 等待 T5AI-Board 完成拍照识别（最多 %.0f 秒）...", timeout_sec)
+        deadline = time.time() + max(0.0, timeout_sec)
+        while time.time() < deadline:
+            status = self.api.get_photo_request_status(request_id)
+            if status in ("done", "failed"):
+                log.info("📷 拍照流程已结束 (status=%s)", status)
+                return status
+            if status == "not_found":
+                log.warning("⌛ 拍照请求已失效，不再等待")
+                return status
+            time.sleep(poll_interval)
+        log.warning("⌛ 等待拍照完成超时（%.0f 秒），继续结束任务", timeout_sec)
+        return "timeout"
+
+    def _local_recognize(self, detect_type: str, task_id: str, name: str) -> None:
+        """本地 YOLO 识别并上报（仅在用户确认拍照后调用）。"""
+        if detect_type == "person":
+            res = self.robot.detect_person(name)
+            if res:
+                self.api.report(
+                    "person", task_id, name,
+                    image_bgr=res["image"],
+                    extra={
+                        "resident": res["resident"],
+                        "outsider": res["outsider"],
+                        "total": res["total_people"],
+                    },
+                )
+        elif detect_type == "flame":
+            res = self.robot.detect_mess(name)
+            if res:
+                per_class = res["per_class"]
+                note_parts = []
+                if per_class.get("debris", 0):
+                    note_parts.append(f"堆积物{per_class['debris']}")
+                if per_class.get("trash", 0):
+                    note_parts.append(f"垃圾{per_class['trash']}")
+                if per_class.get("e-bike", 0):
+                    note_parts.append(f"电动车乱停{per_class['e-bike']}")
+                if per_class.get("bicycle", 0):
+                    note_parts.append(f"自行车乱停{per_class['bicycle']}")
+
+                self.api.report(
+                    "corridor", task_id, name,
+                    image_bgr=res["image"],
+                    extra={
+                        "has_hazard": res["has_hazard"],
+                        "total_hazards": res["hazards"],
+                        "per_class": per_class,
+                        "note": "、".join(note_parts) if note_parts else "环境整洁",
+                        "has_mess": res["has_mess"],
+                        "count": res["count"],
+                    },
+                )
+        elif detect_type == "plate":
+            res = self.robot.detect_plate(name)
+            if res and res["plate_number"]:
+                self.api.report(
+                    "plate", task_id, name,
+                    image_bgr=res["image"],
+                    extra={"plate_number": res["plate_number"]},
+                )
+
     def run(self, task: dict) -> bool:
         task_id = task.get("id") or task.get("task_id")
         if not task_id:
@@ -606,70 +739,44 @@ class MissionRunner:
 
                     # T5AI-Board 拍照请求 + 本地 YOLO 识别都受 autoPhoto 控制
                     if auto_photo and detect_type:
-                        # ① 向后台发起拍照请求，让 T5AI-Board 前来拍照 + AI 识别
+                        # ① 向后台发起拍照请求，请求进入 waiting，等网页人工确认
+                        request_id = None
                         try:
                             coord = None
                             if isinstance(wp, (list, tuple)) and len(wp) >= 3:
                                 coord = {"x": float(wp[1]), "y": float(wp[2])}
                             elif isinstance(wp, dict):
                                 coord = {"x": float(wp.get("x", 0)), "y": float(wp.get("y", 0))}
-                            self.api.create_photo_request(
+                            request_id = self.api.create_photo_request(
                                 task_id, name, detect_type,
                                 self.target_robot_id, coordinate=coord,
                             )
                         except Exception as e:
-                            log.warning("  拍照请求发起失败(不影响本地识别): %s", e)
+                            log.warning("  拍照请求发起失败: %s", e)
 
-                        # ② 本地 YOLO 识别：按 photoType 选择对应检测器
-                        #    person → 行人（居民/外来人员）
-                        #    flame  → 多目标检测（楼道堆积/垃圾/电动车等）
-                        #    plate  → 车牌识别
-                        if detect_type == "person":
-                            res = self.robot.detect_person(name)
-                            if res:
-                                self.api.report(
-                                    "person", task_id, name,
-                                    image_bgr=res["image"],
-                                    extra={
-                                        "resident": res["resident"],
-                                        "outsider": res["outsider"],
-                                        "total": res["total_people"],
-                                    },
-                                )
-                        elif detect_type == "flame":
-                            res = self.robot.detect_mess(name)
-                            if res:
-                                per_class = res["per_class"]
-                                note_parts = []
-                                if per_class.get("debris", 0):
-                                    note_parts.append(f"堆积物{per_class['debris']}")
-                                if per_class.get("trash", 0):
-                                    note_parts.append(f"垃圾{per_class['trash']}")
-                                if per_class.get("e-bike", 0):
-                                    note_parts.append(f"电动车乱停{per_class['e-bike']}")
-                                if per_class.get("bicycle", 0):
-                                    note_parts.append(f"自行车乱停{per_class['bicycle']}")
+                        if not request_id:
+                            log.warning("  ⚠️ 未创建拍照请求，本航点不做拍照和识别")
+                        else:
+                            # ② 驻车等待网页点击「立即拍照」；超时或任务被停止则撤销请求
+                            decision = self.wait_photo_confirm(request_id, task_id)
+                            if decision == "stopped":
+                                log.warning("🛑 等待拍照确认期间任务被停止，撤销请求并退出")
+                                self.api.skip_photo_request(request_id)
+                                stopped_by_user = True
+                                break
+                            if decision == "timeout":
+                                self.api.skip_photo_request(request_id)
+                            elif decision == "confirmed":
+                                # ③ 用户确认后，才执行本地 YOLO 识别
+                                #    person → 行人（居民/外来人员）
+                                #    flame  → 多目标检测（楼道堆积/垃圾/电动车等）
+                                #    plate  → 车牌识别
+                                self._local_recognize(detect_type, task_id, name)
 
-                                self.api.report(
-                                    "corridor", task_id, name,
-                                    image_bgr=res["image"],
-                                    extra={
-                                        "has_hazard": res["has_hazard"],
-                                        "total_hazards": res["hazards"],
-                                        "per_class": per_class,
-                                        "note": "、".join(note_parts) if note_parts else "环境整洁",
-                                        "has_mess": res["has_mess"],
-                                        "count": res["count"],
-                                    },
-                                )
-                        elif detect_type == "plate":
-                            res = self.robot.detect_plate(name)
-                            if res and res["plate_number"]:
-                                self.api.report(
-                                    "plate", task_id, name,
-                                    image_bgr=res["image"],
-                                    extra={"plate_number": res["plate_number"]},
-                                )
+                                # ④ 若这是整趟任务的最后一个航点：等板子拍完照、
+                                #    AI 识别写完告警后再结束任务，避免任务先完成、照片后到
+                                if loop_idx == loops - 1 and i == len(waypoints) - 1:
+                                    self.wait_photo_done(request_id)
 
                     rospy.sleep(2.0)
 
@@ -718,6 +825,7 @@ def main():
     target_robot_id = os.environ.get("TARGET_ROBOT_ID", "t5ai-001")
     log.info("=" * 60)
     log.info("🤖 机器人客户端启动")
+    log.info("  版本:        v2（拍照点驻车等待网页人工确认）")
     log.info("  API:         %s", api_base)
     log.info("  Token:       %s", robot_token)
     log.info("  RobotID:     %s", robot_id)

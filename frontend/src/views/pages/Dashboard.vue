@@ -83,6 +83,55 @@ const visibleAlarmList = computed(() => {
 
 const unreadCount = computed(() => visibleAlarmList.value.length)
 
+// ===== 待确认拍照请求 =====
+const photoRequests = ref([])
+const photoBusy = ref('')
+const PHOTO_TYPE_LABEL = { person: '人员识别', flame: '火焰识别', plate: '车牌识别' }
+let photoPollFailures = 0
+
+function photoTypeLabel(type) {
+  return PHOTO_TYPE_LABEL[type] || type || '识别'
+}
+
+function fmtPhotoTime(value) {
+  if (!value) return ''
+  const d = new Date(String(value).replace(' ', 'T'))
+  if (Number.isNaN(d.getTime())) return String(value)
+  const pad = n => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+async function loadPhotoRequests() {
+  try {
+    const res = await request.get('/photo/requests')
+    photoRequests.value = res?.records || []
+    photoPollFailures = 0
+  } catch (e) {
+    // 接口异常（如后端未更新）时最多重试 3 次后停止轮询，避免持续弹错
+    photoPollFailures++
+    if (photoPollFailures >= 3 && photoPollTimer) {
+      clearInterval(photoPollTimer)
+      photoPollTimer = null
+    }
+    console.warn('待确认拍照请求加载失败:', e?.message || e)
+  }
+}
+
+async function decidePhoto(item, confirm) {
+  if (photoBusy.value) return
+  photoBusy.value = item.request_id
+  try {
+    await request.post(`/photo/${item.request_id}/${confirm ? 'confirm' : 'skip'}`)
+  } catch (e) {
+    // 409 表示已被其他人处理、404 表示已失效，统一刷新列表即可
+    console.warn('拍照请求处理失败:', e)
+  } finally {
+    photoBusy.value = ''
+    await loadPhotoRequests()
+    loadData()
+  }
+}
+
 function levelClass(level) {
   return levelClassMap[level] || 'normal'
 }
@@ -114,11 +163,21 @@ function scopeParams() {
   return myCommunityId ? { communityId: myCommunityId } : {}
 }
 
-function todayRange() {
+// 本周范围：周一 00:00:00 ~ 周日 23:59:59
+function weekRange() {
   const now = new Date()
   const pad = n => String(n).padStart(2, '0')
-  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
-  return { startTime: `${date} 00:00:00`, endTime: `${date} 23:59:59`, date }
+  const fmtDate = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  // getDay(): 0=周日，转换为「距离本周一的天数」
+  const offset = (now.getDay() + 6) % 7
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset)
+  const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6)
+  return {
+    startTime: `${fmtDate(monday)} 00:00:00`,
+    endTime: `${fmtDate(sunday)} 23:59:59`,
+    startDate: fmtDate(monday),
+    endDate: fmtDate(sunday)
+  }
 }
 
 function fmtTime(value) {
@@ -138,9 +197,9 @@ const statusData = ref([0, 0, 0])
 
 async function loadData() {
   const scope = scopeParams()
-  const { startTime, endTime, date } = todayRange()
+  const { startTime, endTime, startDate, endDate } = weekRange()
   try {
-    const [todayAlarms, pendingAlarms, recentAlarms, plates, tasks, robotOverview] = await Promise.all([
+    const [weekAlarms, pendingAlarms, recentAlarms, plates, tasks, robotOverview] = await Promise.all([
       request.get('/alarm/page', { params: { pageNum: 1, pageSize: 200, ...scope, startTime, endTime } }),
       request.get('/alarm/page', { params: { pageNum: 1, pageSize: 10, handleStatus: '未处理', ...scope } }),
       request.get('/alarm/page', { params: { pageNum: 1, pageSize: 20, ...scope } }),
@@ -149,20 +208,25 @@ async function loadData() {
       request.get('/robot-status/overview')
     ])
 
-    const todayRecords = todayAlarms?.records || []
-    stats.alarmTotal = todayAlarms?.total ?? todayRecords.length
+    const weekRecords = weekAlarms?.records || []
+    stats.alarmTotal = weekAlarms?.total ?? weekRecords.length
+
+    const inWeek = value => {
+      const d = String(value || '').slice(0, 10)
+      return d >= startDate && d <= endDate
+    }
 
     const plateRecords = plates?.records || []
-    stats.plateTotal = plateRecords.filter(p => String(p.createTime || '').slice(0, 10) === date).length
+    stats.plateTotal = plateRecords.filter(p => inWeek(p.createTime)).length
 
     const taskRecords = tasks?.records || []
-    stats.inspect = taskRecords.filter(t => String(t.endTime || '').slice(0, 10) === date).length
+    stats.inspect = taskRecords.filter(t => inWeek(t.endTime)).length
 
     // 处理状态分布
     statusStats.未处理 = 0
     statusStats.已处理 = 0
     statusStats.已忽略 = 0
-    todayRecords.forEach(a => {
+    weekRecords.forEach(a => {
       const key = a.handleStatus || '未处理'
       if (statusStats[key] !== undefined) statusStats[key]++
     })
@@ -170,7 +234,7 @@ async function loadData() {
 
     // 类型分布
     const typeCount = {}
-    todayRecords.forEach(a => {
+    weekRecords.forEach(a => {
       const t = TYPE_LABEL[a.alarmType] ? a.alarmType : '其他'
       typeCount[t] = (typeCount[t] || 0) + 1
     })
@@ -295,6 +359,7 @@ function resizeChart() {
 
 let chartRetryTimer = null
 let pollTimer = null
+let photoPollTimer = null
 
 onMounted(async () => {
   if (isSuperAdmin) {
@@ -311,11 +376,15 @@ onMounted(async () => {
   tryInit()
   window.addEventListener('resize', resizeChart)
   pollTimer = setInterval(loadData, 30000)
+  // 拍照请求需要快速响应，单独 3 秒轮询
+  await loadPhotoRequests()
+  photoPollTimer = setInterval(loadPhotoRequests, 3000)
 })
 
 onBeforeUnmount(() => {
   if (chartRetryTimer) clearTimeout(chartRetryTimer)
   if (pollTimer) clearInterval(pollTimer)
+  if (photoPollTimer) clearInterval(photoPollTimer)
   window.removeEventListener('resize', resizeChart)
   if (chartInstance) {
     chartInstance.dispose()
@@ -374,7 +443,7 @@ watch(() => communityState.selectedId, () => {
           <div class="card stat-card">
             <div class="card-title">
               <span class="title-dot"></span>
-              <span>今日数据统计</span>
+              <span>本周数据统计</span>
             </div>
             <div class="stat-list">
               <div class="stat-item">
@@ -386,7 +455,7 @@ watch(() => communityState.selectedId, () => {
                   </svg>
                 </div>
                 <div class="stat-num warn">{{ stats.alarmTotal }}</div>
-                <div class="stat-label">今日告警</div>
+                <div class="stat-label">本周告警</div>
               </div>
               <div class="stat-item">
                 <div class="stat-icon danger">
@@ -488,6 +557,31 @@ watch(() => communityState.selectedId, () => {
       </div>
 
       <div class="home-side">
+        <div class="card photo-card">
+          <div class="card-title">
+            <span class="title-dot"></span>
+            <span>待确认拍照</span>
+            <span v-if="photoRequests.length" class="photo-badge">{{ photoRequests.length }}</span>
+          </div>
+          <div class="photo-list">
+            <div v-for="item in photoRequests" :key="item.request_id" class="photo-item">
+              <div class="photo-head">
+                <span class="photo-waypoint">{{ item.waypoint || '未知航点' }}</span>
+                <span class="photo-type">{{ photoTypeLabel(item.detect_type) }}</span>
+              </div>
+              <div class="photo-sub">任务 {{ item.task_id || '--' }} · 小车已到位</div>
+              <div class="photo-time">{{ fmtPhotoTime(item.created_at) }}</div>
+              <div class="photo-actions">
+                <button class="btn-photo" :disabled="!!photoBusy" @click="decidePhoto(item, true)">
+                  {{ photoBusy === item.request_id ? '处理中…' : '立即拍照' }}
+                </button>
+                <button class="btn-skip" :disabled="!!photoBusy" @click="decidePhoto(item, false)">跳过</button>
+              </div>
+            </div>
+            <div v-if="photoRequests.length === 0" class="photo-empty">暂无待确认拍照</div>
+          </div>
+        </div>
+
         <div class="card alarm-card">
           <div class="card-title">
             <span class="title-dot"></span>
@@ -541,6 +635,9 @@ watch(() => communityState.selectedId, () => {
 .home-side {
   width: 300px;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .card {
@@ -773,8 +870,99 @@ watch(() => communityState.selectedId, () => {
 .alarm-card {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
   min-height: 360px;
+}
+
+/* ===== 待确认拍照 ===== */
+.photo-card {
+  flex-shrink: 0;
+}
+.photo-badge {
+  margin-left: auto;
+  background: #F59E0B;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.photo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.photo-item {
+  border: 1px solid #F0E6D2;
+  background: #FFFCF5;
+  border-radius: 8px;
+  padding: 9px 10px;
+}
+.photo-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.photo-waypoint {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.photo-type {
+  margin-left: auto;
+  font-size: 11px;
+  color: #B26A00;
+  background: #FDF0DA;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.photo-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #6B7A80;
+}
+.photo-time {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #9AA9AF;
+}
+.photo-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.photo-actions button {
+  flex: 1;
+  font-size: 12px;
+  padding: 5px 0;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.photo-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.btn-photo {
+  background: #00A0C0;
+  color: #fff;
+}
+.btn-photo:hover:not(:disabled) {
+  background: #008FAD;
+}
+.btn-skip {
+  background: #fff;
+  color: #406070;
+  border-color: #D0E0E4 !important;
+}
+.btn-skip:hover:not(:disabled) {
+  background: #F4F9FA;
+}
+.photo-empty {
+  padding: 18px 0;
+  text-align: center;
+  color: #9AA9AF;
+  font-size: 12px;
 }
 .alarm-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .unread-badge {

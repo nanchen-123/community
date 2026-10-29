@@ -1,12 +1,13 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import {
   Odometer, Tickets, Warning, Cpu, Van, UserFilled,
   DataAnalysis, User, OfficeBuilding, Fold, Expand, ArrowDown
 } from '@element-plus/icons-vue'
 import { communityState, loadCommunities } from '../stores/community'
+import request from '../api/request'
 
 // 菜单图标（按需引入，替代全局注册全部图标）
 const iconMap = {
@@ -46,6 +47,14 @@ function loadUser() {
 onMounted(() => {
   loadUser()
   if (user.value.role === '超级管理员') loadCommunities()
+  // 全局轮询待确认拍照请求，保证在任意页面都能及时提醒
+  pollPhotoRequests()
+  photoTimer = setInterval(pollPhotoRequests, 3000)
+})
+
+onBeforeUnmount(() => {
+  if (photoTimer) clearInterval(photoTimer)
+  photoTimer = null
 })
 
 // 是否超级管理员（社区筛选仅超管可见）
@@ -100,6 +109,53 @@ async function onLogout() {
 
 // 折叠侧边栏
 const collapsed = ref(false)
+
+// ===== 全局待确认拍照提醒（所有页面可见）=====
+const PHOTO_TYPE_LABEL = { person: '人员识别', flame: '火焰识别', plate: '车牌识别' }
+const photoPending = ref([])
+const notifiedIds = new Set()
+let photoTimer = null
+let photoFailures = 0
+
+const photoTipSub = computed(() => {
+  const first = photoPending.value[0]
+  if (!first) return ''
+  return `${first.waypoint || '拍照点'} · ${PHOTO_TYPE_LABEL[first.detect_type] || '识别'}`
+})
+
+function notifyPhotoRequest(item) {
+  ElNotification({
+    title: '有新的拍照请求待确认',
+    message: `${item.waypoint || '拍照点'} · ${PHOTO_TYPE_LABEL[item.detect_type] || '识别'}，点击前往首页处理`,
+    type: 'warning',
+    duration: 10000,
+    position: 'bottom-right',
+    onClick: () => router.push('/home'),
+  })
+}
+
+async function pollPhotoRequests() {
+  try {
+    const res = await request.get('/photo/requests')
+    const list = res?.records || []
+    photoPending.value = list
+    photoFailures = 0
+    list.forEach(item => {
+      const id = item.request_id
+      if (!id || notifiedIds.has(id)) return
+      notifiedIds.add(id)
+      notifyPhotoRequest(item)
+    })
+  } catch (e) {
+    // 接口异常时最多重试 3 次后停止轮询，避免持续弹错
+    photoFailures++
+    if (photoFailures >= 3 && photoTimer) {
+      clearInterval(photoTimer)
+      photoTimer = null
+    }
+  }
+}
+
 </script>
 
 <template>
@@ -179,6 +235,20 @@ const collapsed = ref(false)
         <router-view />
       </el-main>
     </el-container>
+
+    <!-- 全局待确认拍照悬浮提示（首页已用卡片展示，其余页面悬浮提醒） -->
+    <div
+      v-if="photoPending.length && route.path !== '/home'"
+      class="photo-float"
+      @click="router.push('/home')"
+    >
+      <span class="photo-float-pulse"></span>
+      <div class="photo-float-text">
+        <span class="photo-float-title">待确认拍照 {{ photoPending.length }}</span>
+        <span class="photo-float-sub">{{ photoTipSub }}</span>
+      </div>
+      <span class="photo-float-go">去处理 →</span>
+    </div>
   </el-container>
 </template>
 
@@ -396,8 +466,65 @@ const collapsed = ref(false)
   box-shadow: 0 0 0 1px var(--primary) inset;
 }
 
+/* ====== 全局待确认拍照悬浮提示 ====== */
+.photo-float {
+  position: fixed;
+  right: 24px;
+  bottom: 28px;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: #FFF9EF;
+  border: 1px solid #F5C97A;
+  box-shadow: 0 8px 24px rgba(180, 120, 20, 0.18);
+  cursor: pointer;
+  transition: transform .15s, box-shadow .15s;
+}
+.photo-float:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(180, 120, 20, 0.26);
+}
+.photo-float-pulse {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #F59E0B;
+  flex-shrink: 0;
+  animation: photoPulse 1.4s ease-in-out infinite;
+}
+@keyframes photoPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6); }
+  50% { box-shadow: 0 0 0 7px rgba(245, 158, 11, 0); }
+}
+.photo-float-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.35;
+}
+.photo-float-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #8A5200;
+}
+.photo-float-sub {
+  font-size: 11px;
+  color: #A5711F;
+}
+.photo-float-go {
+  font-size: 12px;
+  color: #B26A00;
+  font-weight: 600;
+  padding-left: 6px;
+  border-left: 1px solid #F5C97A;
+}
+
 /* 响应式 */
 @media (max-width: 600px) {
   .username, .user-role { display: none; }
+  .photo-float { right: 12px; bottom: 12px; padding: 10px 12px; }
+  .photo-float-go { display: none; }
 }
 </style>

@@ -10,6 +10,8 @@ import cn.sju.backend.websocket.WsBroadcaster;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -18,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -61,6 +64,44 @@ public class RobotController {
         Map<String, Object> snapshot = robotStateService.update(robotId, body);
         wsBroadcaster.sendRobotStatus(snapshot);
         return snapshot;
+    }
+
+    /**
+     * 小车轮询拍照请求状态
+     * <p>
+     * waiting = 仍在等待网页人工确认（小车驻车等待）；pending / processing / done = 已放行，
+     * 小车可执行本地识别；skipped = 用户跳过；not_found = 请求已被清理。
+     */
+    @GetMapping("/photo-requests/{requestId}")
+    public Map<String, Object> photoRequestStatus(@PathVariable String requestId) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("request_id", requestId);
+        PhotoRequestService.PhotoRequest request = photoRequestService.get(requestId);
+        if (request == null) {
+            body.put("status", "not_found");
+            return body;
+        }
+        body.put("status", request.getStatus());
+        body.put("detect_type", request.getDetectType());
+        body.put("waypoint", request.getWaypoint());
+        return body;
+    }
+
+    /**
+     * 小车撤销拍照请求
+     * <p>
+     * 等待人工确认超时、或任务被用户停止时调用，避免网页上残留待确认卡片。
+     * 幂等：请求已被处理时返回 skipped=false。
+     */
+    @PostMapping("/photo-requests/{requestId}/skip")
+    public Map<String, Object> skipPhotoRequest(@PathVariable String requestId) {
+        boolean changed = photoRequestService.skip(requestId);
+        PhotoRequestService.PhotoRequest request = photoRequestService.get(requestId);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("request_id", requestId);
+        body.put("skipped", changed);
+        body.put("status", request == null ? "not_found" : request.getStatus());
+        return body;
     }
 
     /**
