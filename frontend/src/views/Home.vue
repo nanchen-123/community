@@ -4,7 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import {
   Odometer, Tickets, Warning, Cpu, Van, UserFilled,
-  DataAnalysis, User, OfficeBuilding, Fold, Expand, ArrowDown
+  DataAnalysis, User, OfficeBuilding, Fold, Expand, ArrowDown, ChatDotRound
 } from '@element-plus/icons-vue'
 import { communityState, loadCommunities } from '../stores/community'
 import request from '../api/request'
@@ -12,7 +12,7 @@ import request from '../api/request'
 // 菜单图标（按需引入，替代全局注册全部图标）
 const iconMap = {
   Odometer, Tickets, Warning, Cpu, Van,
-  UserFilled, DataAnalysis, User, OfficeBuilding
+  UserFilled, DataAnalysis, User, OfficeBuilding, ChatDotRound
 }
 
 const router = useRouter()
@@ -29,7 +29,8 @@ const ALL_MENUS = [
   { path: '/resident', title: '居民管理', icon: 'UserFilled' },
   { path: '/analytics', title: '数据分析', icon: 'DataAnalysis', hideForRoles: ADMIN_ROLES },
   { path: '/admin/users', title: '用户管理', icon: 'User', roles: ADMIN_ROLES },
-  { path: '/community', title: '社区管理', icon: 'OfficeBuilding', roles: ['超级管理员'] }
+  { path: '/community', title: '社区管理', icon: 'OfficeBuilding', roles: ['超级管理员'] },
+  { path: '/assistant', title: 'AI 助手', icon: 'ChatDotRound' }
 ]
 
 // 当前登录用户

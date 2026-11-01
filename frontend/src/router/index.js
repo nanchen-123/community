@@ -18,6 +18,7 @@ const routes = [
         meta: { roles: ['管理员', '超级管理员'] }
       },
       { path: 'resident', component: () => import('../views/pages/ResidentManage.vue') },
+      { path: 'assistant', component: () => import('../views/pages/AiAssistant.vue') },
       {
         path: 'admin/users',
         component: () => import('../views/pages/UserManage.vue'),
