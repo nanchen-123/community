@@ -1,20 +1,29 @@
 <script setup>
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import MarkdownIt from 'markdown-it'
 import request from '../../api/request'
+import { messages, input, sending } from '../../stores/aiChat'
 
-/* ====== 对话数据 ====== */
-const messages = ref([])      // { role, content, error?, tokens? }
-const input = ref('')
-const sending = ref(false)
+/* ====== 对话数据（存于 stores/aiChat.js，切换页面不丢） ====== */
 const listRef = ref(null)
+
+const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
+
+/* ====== 附件（仅当前页面有效，生成报告后自动清空） ====== */
+const fileInputRef = ref(null)
+const attaching = ref(false)
+const attach = ref(null)   // { fileId, fileName, chars }
+
+const MAX_FILE_MB = 30
 
 // 示例问题（空状态时展示）
 const SAMPLES = [
   '怎么发布一次巡检任务？',
   '机器人到达拍照点后为什么停住了？',
   '告警的处理状态有哪些？',
-  '普通用户能看到别的社区数据吗？'
+  '普通用户能看到别的社区数据吗？',
+  '把文件发给 AI，能帮我写总结报告吗？'
 ]
 
 /* ====== 滚动到底部 ====== */
@@ -24,12 +33,77 @@ async function scrollToBottom() {
   if (el) el.scrollTop = el.scrollHeight
 }
 
-/* ====== 发送消息 ====== */
+/* ====== Markdown 渲染（报告、普通回复都用） ====== */
+function renderMarkdown(text) {
+  return md.render(text || '')
+}
+
+/* ====== 选择文件 → 上传解析 ====== */
+function pickFile() {
+  if (sending.value || attaching.value) return
+  fileInputRef.value?.click()
+}
+
+async function onFileChange(e) {
+  const file = e.target.files?.[0]
+  e.target.value = ''   // 允许重复选择同一个文件
+  if (!file) return
+  if (file.size > MAX_FILE_MB * 1024 * 1024) {
+    ElMessage.warning(`文件超过 ${MAX_FILE_MB}MB，请压缩后再上传`)
+    return
+  }
+
+  attaching.value = true
+  try {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await request.post('/ai/file', form, { timeout: 120000 })
+    attach.value = {
+      fileId: res.fileId,
+      fileName: res.fileName,
+      chars: res.chars || 0
+    }
+    ElMessage.success(`已解析 ${(res.chars || 0).toLocaleString()} 字`)
+    await nextTick()
+    input.value = ''
+  } catch (err) {
+    // 错误提示由 request 拦截器统一处理
+  } finally {
+    attaching.value = false
+  }
+}
+
+/* ====== 移除附件（后端一并清理） ====== */
+async function removeFile() {
+  const current = attach.value
+  attach.value = null
+  if (current?.fileId) {
+    request.delete(`/ai/file/${current.fileId}`).catch(() => {})
+  }
+}
+
+/* ====== 下载 Markdown 报告 ====== */
+function downloadReport(content) {
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `AI总结报告_${stamp}.md`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+/* ====== 发送消息（带附件时走总结报告） ====== */
 async function send(text) {
   const content = (text !== undefined ? text : input.value).trim()
-  if (!content || sending.value) return
+  if (sending.value || attaching.value) return
+  if (!content && !attach.value) return
 
-  messages.value.push({ role: 'user', content })
+  const currentAttach = attach.value
+  const userText = content || `请总结这份文件《${currentAttach.fileName}》`
+
+  messages.value.push({ role: 'user', content: userText })
   input.value = ''
   sending.value = true
   scrollToBottom()
@@ -40,13 +114,19 @@ async function send(text) {
       .filter(m => !m.error)
       .map(m => ({ role: m.role, content: m.content }))
 
-    // AI 生成较慢，单独把超时放宽到 60 秒
-    const res = await request.post('/ai/chat', { messages: history }, { timeout: 60000 })
+    const payload = { messages: history }
+    if (currentAttach) payload.fileId = currentAttach.fileId
+
+    // 文件总结可能分段生成，超时放宽到 180 秒；普通问答 60 秒
+    const res = await request.post('/ai/chat', payload, { timeout: currentAttach ? 180000 : 60000 })
     messages.value.push({
       role: 'assistant',
       content: res?.content || '（AI 没有返回内容）',
-      tokens: (res?.promptTokens || 0) + (res?.completionTokens || 0)
+      tokens: (res?.promptTokens || 0) + (res?.completionTokens || 0),
+      report: !!currentAttach,
+      fileName: currentAttach?.fileName
     })
+    if (currentAttach) attach.value = null
   } catch (e) {
     messages.value.push({
       role: 'assistant',
@@ -74,6 +154,9 @@ async function copyText(text) {
     ElMessage.warning('当前浏览器不支持自动复制')
   }
 }
+
+// 从其他页面切回来时，直接定位到最新一条消息
+onMounted(scrollToBottom)
 </script>
 
 <template>
@@ -113,11 +196,21 @@ async function copyText(text) {
         >
           <div v-if="m.role === 'assistant'" class="chat-avatar ai">AI</div>
           <div class="chat-bubble-wrap">
-            <div :class="['chat-bubble', m.role === 'user' ? 'bubble-user' : 'bubble-ai', m.error ? 'bubble-error' : '']">
+            <div
+              v-if="m.role === 'assistant' && !m.error"
+              class="chat-bubble bubble-ai bubble-md"
+              v-html="renderMarkdown(m.content)"
+            ></div>
+            <div
+              v-else
+              :class="['chat-bubble', m.role === 'user' ? 'bubble-user' : 'bubble-ai', m.error ? 'bubble-error' : '']"
+            >
               {{ m.content }}
             </div>
             <div class="chat-meta">
+              <span v-if="m.fileName" class="chat-file-tag">📄 {{ m.fileName }}</span>
               <span v-if="m.tokens" class="chat-tokens">本次约 {{ m.tokens }} tokens</span>
+              <span v-if="m.report && !m.error" class="chat-copy" @click="downloadReport(m.content)">下载 .md</span>
               <span v-if="m.role === 'assistant' && !m.error" class="chat-copy" @click="copyText(m.content)">复制</span>
             </div>
           </div>
@@ -133,20 +226,42 @@ async function copyText(text) {
 
       <!-- 输入区 -->
       <div class="chat-input">
+        <!-- 已选文件 -->
+        <div v-if="attach" class="attach-chip">
+          <span class="attach-icon">📄</span>
+          <span class="attach-name">{{ attach.fileName }}</span>
+          <span class="attach-chars">{{ attach.chars.toLocaleString() }} 字 · 直接发送即生成总结报告</span>
+          <span class="attach-remove" title="移除" @click="removeFile">×</span>
+        </div>
+
         <el-input
           v-model="input"
           type="textarea"
           resize="none"
           :autosize="{ minRows: 1, maxRows: 4 }"
-          placeholder="输入你的问题，Enter 发送，Shift + Enter 换行"
+          :placeholder="attach ? '可留空直接发送，也可填写总结侧重点，例如「重点看消防部分」' : '输入你的问题，Enter 发送，Shift + Enter 换行'"
           :disabled="sending"
           @keydown.enter.exact.prevent="send()"
         />
+        <input
+          ref="fileInputRef"
+          type="file"
+          accept=".docx,.pdf,.txt,.md,.csv,.xlsx"
+          hidden
+          @change="onFileChange"
+        />
         <div class="chat-actions">
-          <span class="chat-hint">Enter 发送 · Shift + Enter 换行</span>
+          <el-button
+            text
+            type="primary"
+            :loading="attaching"
+            :disabled="sending || !!attach"
+            @click="pickFile"
+          >📎 {{ attaching ? '解析中…' : '上传文件' }}</el-button>
+          <span class="chat-hint">支持 docx / pdf / txt / md / xlsx，单个不超过 30MB</span>
           <div class="spacer"></div>
           <el-button :disabled="sending || !messages.length" @click="clearChat">清空对话</el-button>
-          <el-button type="primary" :loading="sending" :disabled="!input.trim()" @click="send()">发送</el-button>
+          <el-button type="primary" :loading="sending" :disabled="!input.trim() && !attach" @click="send()">发送</el-button>
         </div>
       </div>
     </div>
@@ -283,6 +398,69 @@ async function copyText(text) {
   color: #B04A4A;
 }
 
+/* Markdown 内容（总结报告） */
+.bubble-md {
+  white-space: normal;
+}
+.bubble-md > :first-child {
+  margin-top: 0;
+}
+.bubble-md > :last-child {
+  margin-bottom: 0;
+}
+.bubble-md h1 {
+  font-size: 16px;
+  margin: 14px 0 8px;
+}
+.bubble-md h2 {
+  font-size: 14px;
+  margin: 12px 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-deep);
+}
+.bubble-md h3 {
+  font-size: 13px;
+  margin: 10px 0 4px;
+}
+.bubble-md p {
+  margin: 6px 0;
+}
+.bubble-md ul,
+.bubble-md ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.bubble-md li {
+  margin: 2px 0;
+}
+.bubble-md table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.bubble-md th,
+.bubble-md td {
+  border: 1px solid var(--border-deep);
+  padding: 5px 8px;
+  text-align: left;
+}
+.bubble-md th {
+  background: var(--surface-soft);
+  font-weight: 600;
+}
+.bubble-md code {
+  background: var(--surface-soft);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.bubble-md blockquote {
+  margin: 6px 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--primary-tint-2);
+  color: var(--text-soft);
+}
+
 /* 思考中动画 */
 .bubble-typing {
   color: var(--text-soft);
@@ -317,6 +495,48 @@ async function copyText(text) {
 }
 .chat-copy:hover {
   text-decoration: underline;
+}
+
+/* 报告关联的文件名 */
+.chat-file-tag {
+  color: var(--text-soft);
+}
+
+/* 已选文件条 */
+.attach-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  background: var(--primary-tint);
+  border: 1px solid var(--primary-tint-2);
+  border-radius: 8px;
+}
+.attach-icon {
+  font-size: 14px;
+}
+.attach-name {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.attach-chars {
+  color: var(--text-soft);
+}
+.attach-remove {
+  margin-left: auto;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-soft);
+  cursor: pointer;
+}
+.attach-remove:hover {
+  color: #B04A4A;
 }
 
 /* 输入区 */

@@ -21,7 +21,7 @@ spring:
     time-zone: Asia/Shanghai
   servlet:
     multipart:
-      max-file-size: 10MB
+      max-file-size: 30MB
       max-request-size: 100MB
 
 # MyBatis-Plus 配置
@@ -73,6 +73,15 @@ upload:
 # AI 识别服务配置
 ai:
   url: ${AI_URL:http://localhost:5000/recognize}
+
+# AI 助手文件总结配置
+ai-file:
+  tmp-dir: ${AI_FILE_TMP_DIR:uploads/ai-tmp}   # 上传文件临时目录（解析完即删）
+  max-size-mb: 30                             # 单文件大小上限
+  max-chars: 100000                           # 抽取文字上限，超出拒绝
+  chunk-chars: 10000                          # 分段摘要每段字数
+  max-chunks: 10                              # 最多分多少段
+  keep-minutes: 30                            # 上传后多久未使用自动清理
 
 # DeepSeek 大模型配置（Key 放 application-dev.yaml 或环境变量，勿写入本文件）
 deepseek:

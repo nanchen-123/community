@@ -5,6 +5,8 @@ import cn.sju.backend.common.Result;
 import cn.sju.backend.dto.AiChatMessage;
 import cn.sju.backend.dto.AiChatRequest;
 import cn.sju.backend.dto.AiChatResponse;
+import cn.sju.backend.service.AiFileStore;
+import cn.sju.backend.service.AiReportService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -50,6 +52,10 @@ public class AiChatController {
 
     private final DeepSeekClient deepSeekClient;
 
+    private final AiFileStore aiFileStore;
+
+    private final AiReportService aiReportService;
+
     /** 简单内存限流：userName -> 最近一分钟的调用时间戳 */
     private final Map<String, Deque<Long>> callRecords = new ConcurrentHashMap<>();
 
@@ -66,11 +72,15 @@ public class AiChatController {
     }
 
     /**
-     * 对话
+     * 对话：带 fileId 走文件总结报告，否则为普通问答
      */
     @PostMapping("/chat")
     public Result<AiChatResponse> chat(@RequestBody AiChatRequest request, HttpServletRequest httpRequest) {
         String userName = String.valueOf(httpRequest.getAttribute("userName"));
+        String fileId = request == null ? null : request.getFileId();
+        if (fileId != null && !fileId.isBlank()) {
+            return summarize(request, fileId.strip(), userName);
+        }
 
         List<AiChatMessage> incoming = request == null ? null : request.getMessages();
         if (incoming == null || incoming.isEmpty()) {
@@ -108,6 +118,44 @@ public class AiChatController {
             return Result.fail(500, e.getMessage());
         } catch (Exception e) {
             log.error("AI 对话异常: user={}", userName, e);
+            return Result.fail(500, "AI 服务异常，请稍后重试");
+        }
+    }
+
+    /**
+     * 文件总结报告分支
+     */
+    private Result<AiChatResponse> summarize(AiChatRequest request, String fileId, String userName) {
+        if (!tryAcquire(userName)) {
+            return Result.fail(429, "提问太频繁了，请一分钟后再试");
+        }
+
+        // 侧重点：用户最后一句问话（可以为空，空则按通用结构总结）
+        String focus = "";
+        List<AiChatMessage> incoming = request.getMessages();
+        if (incoming != null && !incoming.isEmpty()) {
+            AiChatMessage last = incoming.get(incoming.size() - 1);
+            if ("user".equals(last.getRole()) && last.getContent() != null) {
+                focus = last.getContent().strip();
+            }
+        }
+        if (focus.length() > MAX_CONTENT_LENGTH) {
+            return Result.fail(400, "侧重点太长了，请精简到 " + MAX_CONTENT_LENGTH + " 字以内");
+        }
+
+        try {
+            AiFileStore.Entry entry = aiFileStore.get(fileId, userName);
+            AiChatResponse response = aiReportService.summarize(entry, focus);
+            // 生成完成即释放，避免同一文件被反复复用
+            aiFileStore.remove(fileId, userName);
+            return Result.success(response);
+        } catch (IllegalArgumentException e) {
+            return Result.fail(400, e.getMessage());
+        } catch (IllegalStateException e) {
+            log.warn("AI 文件总结失败: user={}, reason={}", userName, e.getMessage());
+            return Result.fail(500, e.getMessage());
+        } catch (Exception e) {
+            log.error("AI 文件总结异常: user={}", userName, e);
             return Result.fail(500, "AI 服务异常，请稍后重试");
         }
     }
