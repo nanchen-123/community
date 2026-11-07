@@ -231,6 +231,8 @@ python3 robot_client.py
 
 后端配置位于 `backend/src/main/resources/application.yaml`，常用项：
 
+> 📄 **环境配置模板**：[`application-example.yaml`](./backend/src/main/resources/application-example.yaml) —— 含全部环境变量清单（`DB_PASSWORD`、`JWT_SECRET`、`ROBOT_TOKEN`、`DEEPSEEK_API_KEY`）、获取方式注释与占位值。本地开发复制为 `application-dev.yaml` 改值即可；生产部署用环境变量注入，无需改文件。
+
 | 配置项                                       | 默认值                                            | 说明                             |
 | ----------------------------------------- | ---------------------------------------------- | ------------------------------ |
 | `server.port`                             | 8080                                           | 服务端口                           |

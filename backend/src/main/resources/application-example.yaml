@@ -1,0 +1,111 @@
+# ============================================================
+# 社区安防智能巡检系统 —— 环境配置模板
+#
+# 使用方法（二选一）：
+#   ① 本地开发：把本文件复制为同目录下的 application-dev.yaml，
+#      将 changeme 占位值改成自己的真实配置（dev 已在 .gitignore，不会被提交）
+#   ② 生产部署：不改文件，直接用系统环境变量注入下方列出的变量名
+#
+# 需要注入的环境变量一览：
+#   DB_PASSWORD      数据库 root 口令（自建 MySQL 时自己设定）
+#   JWT_SECRET       JWT 签名密钥（任意 ≥32 位随机字符串，泄露即全部令牌失效）
+#   ROBOT_TOKEN      机器人客户端携带的令牌（自定，需与 robot_client.py 中一致）
+#   DEEPSEEK_API_KEY DeepSeek 平台 API Key（https://platform.deepseek.com 申请）
+# 可选变量：DB_URL / DB_USERNAME / CORS_ALLOWED_ORIGINS / UPLOAD_DIR / AI_URL
+# ============================================================
+
+server:
+  port: 8080
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+
+spring:
+  application:
+    name: backend
+  profiles:
+    active: dev
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 数据库连接串；仅主机/端口/库名不同时才需要覆盖 DB_URL
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/community_db?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    username: ${DB_USERNAME:root}
+    # 必填：改成你的 MySQL root 口令
+    password: ${DB_PASSWORD:changeme}
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+  servlet:
+    multipart:
+      max-file-size: 30MB
+      max-request-size: 100MB
+
+# MyBatis-Plus 配置（一般无需修改）
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    cache-enabled: false
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+
+# 日志配置
+logging:
+  level:
+    cn.sju.backend: debug
+    org.springframework: warn
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+# API 文档（Swagger UI）
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+
+# JWT 配置
+# 必填：JWT_SECRET 注入 ≥32 位随机字符串；JWT_SECRET 变更后所有已登录令牌立即失效
+jwt:
+  secret: ${JWT_SECRET:changeme-jwt-secret-use-at-least-32-random-chars}
+  expiration: 86400000  # 24h
+
+# 机器人配置
+# 必填：ROBOT_TOKEN 注入自定义令牌，robot_client.py 的 ROBOT_TOKEN 必须与之相同
+robot:
+  token: ${ROBOT_TOKEN:changeme-robot-token}
+  online-ttl-ms: 30000
+
+# 跨域配置：仅允许列出的前端来源携带凭据访问；部署后追加实际域名
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+
+# 文件上传配置：抓拍图片保存目录，映射到 /uploads/**
+upload:
+  dir: ${UPLOAD_DIR:uploads}
+
+# AI 识别服务配置：Flask 识别服务地址（ai_service/recognize.py，端口 5000）
+ai:
+  url: ${AI_URL:http://localhost:5000/recognize}
+
+# AI 助手文件总结配置
+ai-file:
+  tmp-dir: ${AI_FILE_TMP_DIR:uploads/ai-tmp}   # 上传文件临时目录（解析完即删）
+  max-size-mb: 30                             # 单文件大小上限
+  max-chars: 100000                           # 抽取文字上限，超出拒绝
+  chunk-chars: 10000                          # 分段摘要每段字数
+  max-chunks: 10                              # 最多分多少段
+  keep-minutes: 30                            # 上传后多久未使用自动清理
+
+# DeepSeek 大模型配置
+# 必填（使用 AI 助手时）：DEEPSEEK_API_KEY 注入平台密钥，勿把真实 Key 写入任何会提交的文件
+deepseek:
+  api-key: ${DEEPSEEK_API_KEY:}
+  base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+  model: ${DEEPSEEK_MODEL:deepseek-chat}
