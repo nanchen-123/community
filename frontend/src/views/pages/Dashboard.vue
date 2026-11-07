@@ -48,6 +48,8 @@ const levelClassMap = { 严重: 'danger', 警告: 'warn', 一般: 'normal', 高:
 
 const alarmList = ref([])
 
+// 会话级已读记录：按用户隔离，关闭浏览器后自动清空，
+// 未处理告警在新会话中重新提醒，且不会像 localStorage 一样跨会话永久累积
 function _readKey() {
   const a = getAuth()
   const id = a?.username || a?.userName || a?.userId || 'anonymous'
@@ -55,26 +57,17 @@ function _readKey() {
 }
 function _loadReadIds() {
   try {
-    const raw = localStorage.getItem(_readKey()) || '[]'
-    const s = new Set(JSON.parse(raw))
-    if (s.size > 2000) {
-      const arr = [...s].slice(-1000)
-      localStorage.setItem(_readKey(), JSON.stringify(arr))
-      return new Set(arr)
-    }
-    return s
+    return new Set(JSON.parse(sessionStorage.getItem(_readKey()) || '[]'))
   } catch {
     return new Set()
   }
 }
 function _saveReadIds(set) {
-  try { localStorage.setItem(_readKey(), JSON.stringify([...set])) } catch {}
+  try { sessionStorage.setItem(_readKey(), JSON.stringify([...set])) } catch {}
 }
 const readIds = ref(_loadReadIds())
-const readVersion = ref(0)
 
 const visibleAlarmList = computed(() => {
-  readVersion.value
   const set = readIds.value
   return alarmList.value
     .filter(a => !set.has(Number(a.id)) && !set.has(String(a.id)))
@@ -136,22 +129,26 @@ function levelClass(level) {
   return levelClassMap[level] || 'normal'
 }
 
+// 重新赋值 Set 以触发 computed 响应式更新
+function _commitReadIds(set) {
+  readIds.value = new Set(set)
+  _saveReadIds(readIds.value)
+}
+
 function markAllRead() {
   const set = readIds.value
   visibleAlarmList.value.forEach(a => {
     set.add(Number(a.id))
     set.add(String(a.id))
   })
-  _saveReadIds(set)
-  readVersion.value++
+  _commitReadIds(set)
 }
 
 function goRecord(item) {
   const set = readIds.value
   set.add(Number(item.id))
   set.add(String(item.id))
-  _saveReadIds(set)
-  readVersion.value++
+  _commitReadIds(set)
   router.push('/alarm')
 }
 
@@ -871,7 +868,8 @@ watch(() => communityState.selectedId, () => {
   display: flex;
   flex-direction: column;
   flex: 1;
-  min-height: 360px;
+  /* 与告警分布统计卡片最低高度一致（标题 + 260px 内容区 + 内边距） */
+  min-height: 320px;
 }
 
 /* ===== 待确认拍照 ===== */
@@ -988,7 +986,8 @@ watch(() => communityState.selectedId, () => {
 .btn-read:hover { background: #F4F9FA; color: #006080; }
 
 .alarm-list {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 0; /* 允许列表在固定卡片高度内收缩，超出部分滚动 */
   display: flex;
   flex-direction: column;
   overflow-y: auto;

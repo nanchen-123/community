@@ -237,7 +237,7 @@ onMounted(() => {
         <el-table-column prop="deadline" label="截止时间" width="160">
           <template #default="{ row }">{{ row.deadline || '--' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right" align="center">
+        <el-table-column v-if="isAdminView" label="操作" width="160" fixed="right" align="center">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
             <el-button link type="danger" size="small" @click="doDelete(row)">删除</el-button>
